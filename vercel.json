@@ -4,9 +4,7 @@
   "outputDirectory": "dist/client",
   "installCommand": "npm install",
   "devCommand": "npm run dev",
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/$1" }
-  ],
+  "rewrites": [],
   "headers": [
     { "source": "/api/(.*)", "headers": [{ "key": "Access-Control-Allow-Origin", "value": "*" }] }
   ]
