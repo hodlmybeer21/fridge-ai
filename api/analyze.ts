@@ -12,7 +12,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'OPTIONS') { res.status(200).end(); return }
 
   // ── /api/analyze ─────────────────────────────────────────────────────────
-  if (req.path === '/api/analyze' || req.url?.startsWith('/api/analyze')) {
+  const reqPath = req.path || req.url || ''
+
+  if (reqPath.startsWith('/api/analyze')) {
     const { imageUrl } = req.body || {}
     if (!imageUrl) return res.status(400).json({ error: 'imageUrl required' })
 
@@ -73,7 +75,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // ── /api/recipes ──────────────────────────────────────────────────────────
-  if (req.path === '/api/recipes' || req.url?.startsWith('/api/recipes')) {
+  if (reqPath.startsWith('/api/recipes') && !reqPath.match(/\/api\/recipes\/\d+/)) {
     if (req.method === 'GET') {
       // Return 405 for GET on /api/recipes (recipe details use GET /:id)
       res.status(405).json({ error: 'POST required' })
@@ -116,7 +118,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // ── /api/recipes/:id ──────────────────────────────────────────────────────
-  const recipeIdMatch = (req.path || req.url || '').match(/\/api\/recipes\/(\d+)/)
+  const recipeIdMatch = reqPath.match(/\/api\/recipes\/(\d+)/)
   if (recipeIdMatch) {
     const id = recipeIdMatch[1]
     try {
