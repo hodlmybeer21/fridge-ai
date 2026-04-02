@@ -10,87 +10,136 @@ type Recipe = {
   matchPercent: number
 }
 
-type View = 'upload' | 'analyzing' | 'recipes' | 'error'
+type Area = 'fridge' | 'freezer' | 'pantry' | 'grocery'
+
+type Photo = {
+  id: string
+  area: Area
+  dataUrl: string
+  ingredients: string[]
+  analyzing: boolean
+  error?: string
+}
+
+const AREAS: { value: Area; label: string; emoji: string }[] = [
+  { value: 'fridge', label: 'Fridge', emoji: '🧊' },
+  { value: 'freezer', label: 'Freezer', emoji: '❄️' },
+  { value: 'pantry', label: 'Pantry', emoji: '🫙' },
+  { value: 'grocery', label: 'Grocery Haul', emoji: '🛒' },
+]
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
 
 export default function App() {
-  const [view, setView] = useState<View>('upload')
-  const [imageUrl, setImageUrl] = useState<string>('')
-  const [ingredients, setIngredients] = useState<string[]>([])
+  const [photos, setPhotos] = useState<Photo[]>([])
+  const [selectedArea, setSelectedArea] = useState<Area>('fridge')
   const [recipes, setRecipes] = useState<Recipe[]>([])
+  const [allIngredients, setAllIngredients] = useState<string[]>([])
+  const [view, setView] = useState<'upload' | 'analyzing' | 'recipes' | 'error'>('upload')
   const [error, setError] = useState('')
   const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null)
   const [recipeDetail, setRecipeDetail] = useState<any>(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Convert file to base64 data URL
-  const fileToDataUrl = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(reader.result as string)
-      reader.onerror = reject
-      reader.readAsDataURL(file)
-    })
-
-  const handleFile = async (file: File) => {
+  const handleFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return
+    const file = files[0]
     if (!file.type.startsWith('image/')) {
       setError('Please upload an image file.')
       setView('error')
       return
     }
     const dataUrl = await fileToDataUrl(file)
-    setImageUrl(dataUrl)
-    analyzeImage(dataUrl)
+    const id = Math.random().toString(36).slice(2)
+
+    const newPhoto: Photo = {
+      id,
+      area: selectedArea,
+      dataUrl,
+      ingredients: [],
+      analyzing: true,
+    }
+
+    setPhotos(prev => [...prev, newPhoto])
+    analyzePhoto(id, dataUrl)
   }
 
-  const handleCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) handleFile(file)
-  }
-
-  const analyzeImage = async (url: string) => {
-    setView('analyzing')
-    setError('')
+  const analyzePhoto = async (id: string, dataUrl: string) => {
     try {
-      // Step 1: Vision AI → ingredients
-      const analyzeRes = await fetch('/api/analyze', {
+      const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageUrl: url })
+        body: JSON.stringify({ imageUrl: dataUrl })
       })
-      const analyzeData = await analyzeRes.json()
-      if (!analyzeRes.ok) throw new Error(analyzeData.error || 'Analysis failed')
-      const ingredientsList = analyzeData.ingredients || []
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Analysis failed')
 
-      if (ingredientsList.length === 0) {
-        setError(" couldn't find any ingredients. Try a clearer photo with better lighting.")
-        setView('error')
-        return
-      }
+      setPhotos(prev => prev.map(p =>
+        p.id === id
+          ? { ...p, ingredients: data.ingredients || [], analyzing: false }
+          : p
+      ))
+    } catch (err: any) {
+      setPhotos(prev => prev.map(p =>
+        p.id === id
+          ? { ...p, analyzing: false, error: err.message }
+          : p
+      ))
+    }
+  }
 
-      setIngredients(ingredientsList)
+  const removePhoto = (id: string) => {
+    setPhotos(prev => prev.filter(p => p.id !== id))
+  }
 
-      // Step 2: Spoonacular → recipes
-      const recipesRes = await fetch('/api/recipes', {
+  const hasResults = photos.length > 0 && photos.every(p => !p.analyzing)
+
+  const findRecipes = async () => {
+    const ingredients = photos.flatMap(p => p.ingredients)
+    // Dedupe and clean
+    const unique = [...new Set(ingredients.map(i => i.toLowerCase().trim()))]
+
+    if (unique.length === 0) {
+      setError('No ingredients found. Try clearer photos with better lighting.')
+      setView('error')
+      return
+    }
+
+    setAllIngredients(unique)
+    setView('analyzing')
+
+    try {
+      const res = await fetch('/api/recipes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ingredients: ingredientsList })
+        body: JSON.stringify({ ingredients: unique })
       })
-      const recipesData = await recipesRes.json()
-      if (!recipesRes.ok) throw new Error(recipesData.error || 'Recipe search failed')
-
-      setRecipes(recipesData.recipes || [])
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Recipe search failed')
+      setRecipes(data.recipes || [])
       setView('recipes')
     } catch (err: any) {
-      setError(err.message || 'Something went wrong. Please try again.')
+      setError(err.message || 'Something went wrong.')
       setView('error')
     }
   }
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    const file = e.dataTransfer.files?.[0]
-    if (file) handleFile(file)
+  const reset = () => {
+    setPhotos([])
+    setRecipes([])
+    setAllIngredients([])
+    setView('upload')
+    setError('')
+    setSelectedRecipe(null)
+    setRecipeDetail(null)
   }
 
   const openRecipeDetail = async (recipe: Recipe) => {
@@ -108,15 +157,8 @@ export default function App() {
     }
   }
 
-  const reset = () => {
-    setView('upload')
-    setImageUrl('')
-    setIngredients([])
-    setRecipes([])
-    setError('')
-    setSelectedRecipe(null)
-    setRecipeDetail(null)
-  }
+  const totalIngredients = photos.reduce((sum, p) => sum + p.ingredients.length, 0)
+  const analyzingCount = photos.filter(p => p.analyzing).length
 
   return (
     <div className="min-h-screen bg-stone-50">
@@ -136,69 +178,171 @@ export default function App() {
         {/* ── Upload View ── */}
         {view === 'upload' && (
           <div className="space-y-4">
-            <div className="text-center py-6">
-              <div className="text-6xl mb-4">📸</div>
-              <h2 className="text-2xl font-bold text-stone-900 mb-2">Open your fridge</h2>
-              <p className="text-stone-500 text-sm">Take a photo of what's inside. We'll find recipes you can make right now.</p>
+
+            {/* Area selector */}
+            <div>
+              <p className="text-sm font-medium text-stone-600 mb-2">What are you photographing?</p>
+              <div className="flex gap-2 flex-wrap">
+                {AREAS.map(a => (
+                  <button
+                    key={a.value}
+                    onClick={() => setSelectedArea(a.value)}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
+                      selectedArea === a.value
+                        ? 'bg-emerald-100 text-emerald-700 border border-emerald-300'
+                        : 'bg-white text-stone-600 border border-stone-200 hover:border-stone-300'
+                    }`}
+                  >
+                    <span>{a.emoji}</span> {a.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
+            {/* Camera / Upload */}
             <div
-              className="card p-8 text-center cursor-pointer transition-all hover:border-brand-300 hover:shadow-md"
-              onDrop={handleDrop}
-              onDragOver={e => e.preventDefault()}
+              className="card p-6 text-center cursor-pointer transition-all hover:border-emerald-300 hover:shadow-md"
               onClick={() => fileInputRef.current?.click()}
             >
-              <div className="text-4xl mb-3">🧊</div>
-              <p className="font-semibold text-stone-700 mb-1">Drop a fridge photo or click to upload</p>
-              <p className="text-xs text-stone-400">JPG, PNG, HEIC — any format</p>
+              <div className="text-4xl mb-2">📷</div>
+              <p className="font-semibold text-stone-700 mb-1">
+                Add {AREAS.find(a => a.value === selectedArea)?.emoji}{' '}
+                {AREAS.find(a => a.value === selectedArea)?.label} photo
+              </p>
+              <p className="text-xs text-stone-400">Tap to take or upload a photo</p>
               <input
                 ref={fileInputRef}
                 type="file"
                 accept="image/*"
                 capture="environment"
                 className="hidden"
-                onChange={handleCapture}
+                onChange={e => handleFiles(e.target.files)}
               />
             </div>
 
-            <button
-              className="btn-primary flex items-center justify-center gap-2"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <span>📷</span> Take a Photo
-            </button>
+            {/* Photo gallery */}
+            {photos.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold text-stone-800 text-sm">
+                    {photos.length} photo{photos.length > 1 ? 's' : ''} added
+                  </h3>
+                  {photos.length > 0 && (
+                    <span className="text-xs text-stone-400">
+                      {totalIngredients} ingredients found
+                    </span>
+                  )}
+                </div>
 
-            <div className="flex items-center gap-3 text-stone-400 text-xs text-center">
-              <div className="flex-1 h-px bg-stone-200" />
-              <span>Works best with fridge door open</span>
-              <div className="flex-1 h-px bg-stone-200" />
-            </div>
+                {photos.map(photo => (
+                  <div key={photo.id} className="card p-3">
+                    <div className="flex gap-3">
+                      <img
+                        src={photo.dataUrl}
+                        alt={photo.area}
+                        className="w-16 h-16 rounded-xl object-cover flex-shrink-0"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm font-medium text-stone-700">
+                            {AREAS.find(a => a.value === photo.area)?.emoji}{' '}
+                            {AREAS.find(a => a.value === photo.area)?.label}
+                          </span>
+                          <button
+                            onClick={() => removePhoto(photo.id)}
+                            className="text-stone-400 hover:text-red-500 text-xs px-2 py-0.5 rounded-lg hover:bg-red-50 transition-all"
+                          >
+                            ✕
+                          </button>
+                        </div>
 
-            <div className="card p-4">
-              <h3 className="font-semibold text-stone-800 mb-2 text-sm">How it works</h3>
-              <ol className="space-y-2 text-xs text-stone-500">
-                <li className="flex gap-2"><span className="text-brand-600 font-bold">1.</span> Take a photo of your fridge, pantry, or grocery haul</li>
-                <li className="flex gap-2"><span className="text-brand-600 font-bold">2.</span> AI identifies your ingredients instantly</li>
-                <li className="flex gap-2"><span className="text-brand-600 font-bold">3.</span> Get recipes matched to what you already have</li>
-              </ol>
-            </div>
+                        {photo.analyzing && (
+                          <div className="flex items-center gap-1.5 text-xs text-stone-400">
+                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            Identifying ingredients...
+                          </div>
+                        )}
+
+                        {photo.error && (
+                          <p className="text-xs text-red-500">{photo.error}</p>
+                        )}
+
+                        {!photo.analyzing && !photo.error && photo.ingredients.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {photo.ingredients.slice(0, 6).map(i => (
+                              <span key={i} className="text-xs px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">
+                                {i}
+                              </span>
+                            ))}
+                            {photo.ingredients.length > 6 && (
+                              <span className="text-xs text-stone-400">+{photo.ingredients.length - 6} more</span>
+                            )}
+                          </div>
+                        )}
+
+                        {!photo.analyzing && !photo.error && photo.ingredients.length === 0 && (
+                          <p className="text-xs text-stone-400">No ingredients found</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Add more photos */}
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-full py-3 border-2 border-dashed border-stone-200 rounded-xl text-sm text-stone-500 hover:border-stone-300 hover:text-stone-600 transition-all flex items-center justify-center gap-2"
+                >
+                  <span>+</span> Add another photo
+                </button>
+
+                {/* Find recipes CTA */}
+                {hasResults && totalIngredients > 0 && (
+                  <button className="btn-primary py-4 text-base" onClick={findRecipes}>
+                    🍳 Find {recipes.length > 0 ? 'better ' : ''}Recipes ({totalIngredients} ingredients)
+                  </button>
+                )}
+
+                {hasResults && totalIngredients === 0 && (
+                  <div className="text-center py-3 text-sm text-stone-500">
+                    No ingredients detected. Try clearer photos.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {photos.length === 0 && (
+              <div className="card p-4">
+                <h3 className="font-semibold text-stone-800 mb-2 text-sm">How it works</h3>
+                <ol className="space-y-2 text-xs text-stone-500">
+                  <li className="flex gap-2"><span className="text-emerald-600 font-bold">1.</span> Choose an area — fridge, freezer, pantry, or grocery haul</li>
+                  <li className="flex gap-2"><span className="text-emerald-600 font-bold">2.</span> Take photos of what you have</li>
+                  <li className="flex gap-2"><span className="text-emerald-600 font-bold">3.</span> Add as many areas as you want</li>
+                  <li className="flex gap-2"><span className="text-emerald-600 font-bold">4.</span> Get recipes matched to everything combined</li>
+                </ol>
+              </div>
+            )}
           </div>
         )}
 
         {/* ── Analyzing View ── */}
         {view === 'analyzing' && (
           <div className="text-center py-16">
-            {imageUrl && (
-              <div className="rounded-2xl overflow-hidden mb-6 max-h-64 mx-auto">
-                <img src={imageUrl} alt="Your fridge" className="w-full object-cover" />
-              </div>
-            )}
+            <div className="grid grid-cols-3 gap-2 mb-6 max-w-xs mx-auto">
+              {photos.slice(0, 3).map(p => (
+                <div key={p.id} className="rounded-xl overflow-hidden">
+                  <img src={p.dataUrl} alt={p.area} className="w-full aspect-square object-cover" />
+                </div>
+              ))}
+            </div>
             <div className="text-5xl mb-4 animate-bounce">🔍</div>
-            <h2 className="text-xl font-bold text-stone-900 mb-2">Looking in your fridge...</h2>
-            <p className="text-stone-400 text-sm mb-6">Identifying ingredients with AI vision</p>
-            <div className="flex items-center justify-center gap-1">
-              {[0,1,2].map(i => (
-                <div key={i} className="w-2 h-2 rounded-full bg-brand-500 animate-pulse"
+            <h2 className="text-xl font-bold text-stone-900 mb-2">Finding recipes...</h2>
+            <p className="text-stone-400 text-sm">
+              {analyzingCount > 0 ? `Analyzing ${analyzingCount} photo${analyzingCount > 1 ? 's' : ''}...` : 'Matching ingredients to recipes'}
+            </p>
+            <div className="flex items-center justify-center gap-1 mt-4">
+              {[0, 1, 2].map(i => (
+                <div key={i} className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"
                   style={{ animationDelay: `${i * 200}ms`, opacity: 0.4 + i * 0.2 }} />
               ))}
             </div>
@@ -209,13 +353,16 @@ export default function App() {
         {view === 'recipes' && (
           <div>
             <button className="btn-secondary mb-4 text-sm" onClick={reset}>
-              ← New photo
+              ← New search
             </button>
 
             <div className="mb-4">
-              <h2 className="text-xl font-bold text-stone-900 mb-1">What you have</h2>
-              <div className="flex flex-wrap gap-1.5 mt-2">
-                {ingredients.map(i => (
+              <h2 className="text-xl font-bold text-stone-900 mb-1">Your combined inventory</h2>
+              <p className="text-xs text-stone-400 mb-2">
+                {photos.length} areas · {allIngredients.length} ingredients
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {allIngredients.map(i => (
                   <span key={i} className="tag">{i}</span>
                 ))}
               </div>
@@ -223,13 +370,15 @@ export default function App() {
 
             <div className="h-px bg-stone-200 my-5" />
 
-            <h3 className="font-bold text-stone-800 mb-3">{recipes.length} recipes you can make</h3>
+            <h3 className="font-bold text-stone-800 mb-3">
+              {recipes.length} recipes you can make
+            </h3>
 
             {recipes.length === 0 ? (
               <div className="card p-8 text-center">
                 <div className="text-4xl mb-3">🤷</div>
                 <p className="text-stone-600 font-medium">No exact matches found.</p>
-                <p className="text-stone-400 text-xs mt-1">Try a photo with more ingredients visible.</p>
+                <p className="text-stone-400 text-xs mt-1">Try adding more ingredients from other areas.</p>
               </div>
             ) : (
               <div className="space-y-3">
@@ -250,7 +399,7 @@ export default function App() {
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-stone-900 text-sm leading-tight mb-1">{recipe.title}</p>
                         <div className="flex items-center gap-2 mb-2">
-                          <span className="text-xs font-medium text-brand-600">
+                          <span className="text-xs font-medium text-emerald-600">
                             {recipe.matchPercent}% match
                           </span>
                           <span className="text-xs text-stone-400">
@@ -276,7 +425,7 @@ export default function App() {
         {view === 'error' && (
           <div className="text-center py-12">
             <div className="text-5xl mb-4">😅</div>
-            <h2 className="text-xl font-bold text-stone-900 mb-2">Couldn't analyze that photo</h2>
+            <h2 className="text-xl font-bold text-stone-900 mb-2">Couldn't analyze that</h2>
             <p className="text-stone-500 text-sm mb-6">{error}</p>
             <button className="btn-primary max-w-xs mx-auto" onClick={reset}>
               Try again
@@ -292,7 +441,6 @@ export default function App() {
           onClick={e => e.target === e.currentTarget && setSelectedRecipe(null)}
         >
           <div className="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[90vh] overflow-y-auto">
-            {/* Modal Header */}
             <div className="sticky top-0 bg-white border-b border-stone-100 p-4 flex items-start justify-between gap-3">
               <div className="flex-1 min-w-0">
                 <h3 className="font-bold text-stone-900 leading-tight">{selectedRecipe.title}</h3>
@@ -310,21 +458,19 @@ export default function App() {
               >×</button>
             </div>
 
-            {/* Match Info */}
-            <div className="px-4 py-3 bg-brand-50 flex items-center gap-3">
+            <div className="px-4 py-3 bg-emerald-50 flex items-center gap-3">
               <div className="flex-1">
-                <p className="text-xs text-brand-600 font-medium">Ingredients you have</p>
+                <p className="text-xs text-emerald-600 font-medium">Ingredients you have</p>
                 <p className="text-sm text-stone-700">
                   {selectedRecipe.usedCount} of {selectedRecipe.usedCount + selectedRecipe.missedCount}
                 </p>
               </div>
               <div className="text-right">
-                <p className="text-xs text-brand-600 font-medium">Match</p>
-                <p className="text-lg font-bold text-brand-600">{selectedRecipe.matchPercent}%</p>
+                <p className="text-xs text-emerald-600 font-medium">Match</p>
+                <p className="text-lg font-bold text-emerald-600">{selectedRecipe.matchPercent}%</p>
               </div>
             </div>
 
-            {/* Missing Ingredients */}
             {selectedRecipe.missedIngredients.length > 0 && (
               <div className="px-4 py-3 border-b border-stone-100">
                 <p className="text-xs font-semibold text-stone-500 uppercase tracking-wide mb-2">You need</p>
@@ -338,7 +484,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Recipe Detail */}
             <div className="p-4">
               {loadingDetail ? (
                 <div className="text-center py-8 text-stone-400 text-sm">Loading recipe...</div>
