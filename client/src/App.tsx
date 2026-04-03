@@ -142,6 +142,12 @@ export default function App() {
     setRecipeDetail(null)
   }
 
+  const openInstacart = (ingredients: string[]) => {
+    const query = ingredients.map(i => i.replace(/[^a-zA-Z0-9 ]/g, '').trim()).join(', ')
+    const url = `https://www.instacart.com/store/search?q=${encodeURIComponent(query)}`
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
   const openRecipeDetail = async (recipe: Recipe) => {
     setSelectedRecipe(recipe)
     setRecipeDetail(null)
@@ -472,15 +478,24 @@ export default function App() {
             </div>
 
             {selectedRecipe.missedIngredients.length > 0 && (
-              <div className="px-4 py-3 border-b border-stone-100">
-                <p className="text-xs font-semibold text-stone-500 uppercase tracking-wide mb-2">You need</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {selectedRecipe.missedIngredients.map((ing, i) => (
-                    <span key={i} className="text-xs px-2.5 py-1 rounded-full bg-stone-100 text-stone-600">
-                      {ing}
-                    </span>
-                  ))}
+              <div className="px-4 py-3 border-b border-stone-100 space-y-3">
+                <div>
+                  <p className="text-xs font-semibold text-stone-500 uppercase tracking-wide mb-2">You need</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedRecipe.missedIngredients.map((ing, i) => (
+                      <span key={i} className="text-xs px-2.5 py-1 rounded-full bg-stone-100 text-stone-600">
+                        {ing}
+                      </span>
+                    ))}
+                  </div>
                 </div>
+                <button
+                  onClick={() => openInstacart(selectedRecipe.missedIngredients)}
+                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 text-white font-semibold text-sm hover:from-teal-600 hover:to-emerald-600 transition-all flex items-center justify-center gap-2"
+                >
+                  <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor"><path d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.3 2.3c-.6.6-.2 1.7.6 1.7H17M17 17a2 2 0 100-4 2 2 0 000 4zM9 17a2 2 0 100-4 2 2 0 000 4z"/></svg>
+                  Buy missing ingredients on Instacart
+                </button>
               </div>
             )}
 
