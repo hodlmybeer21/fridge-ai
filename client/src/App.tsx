@@ -81,6 +81,7 @@ function saveToStorage<T>(key: string, value: T) {
 const LS_SAVED = "fridgeai_saved"
 const LS_HISTORY = "fridgeai_history"
 const LS_PANTRY = "fridgeai_pantry"
+const LS_SHOPPING = "fridgeai_shopping"
 
 export default function App() {
   const [tab, setTab] = useState<"scan" | "cookbook">("scan")
