@@ -14,7 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return
   }
 
-  const { ingredients } = req.body || {}
+  const { ingredients, cuisine, diet, maxReadyTime } = req.body || {}
   if (!Array.isArray(ingredients) || ingredients.length === 0) {
     return res.status(400).json({ error: 'ingredients array required' })
   }
@@ -25,33 +25,80 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   )
   if (clean.length === 0) return res.json({ recipes: [] })
 
+  const hasFilters = cuisine || diet || maxReadyTime
+
   try {
-    const response = await axios.get(
-      'https://api.spoonacular.com/recipes/findByIngredients',
-      {
-        params: {
-          ingredients: clean.join(','),
-          number: 8,
-          ranking: 2,
-          ignorePantry: true,
-          apiKey: SPOONACULAR_KEY
-        }
+    let response: any
+
+    if (hasFilters) {
+      // ── Filtered search via complexSearch ──────────────────────────────────
+      const params: any = {
+        includeIngredients: clean.join(','),
+        number: 12,
+        ranking: 2,
+        ignorePantry: true,
+        apiKey: SPOONACULAR_KEY,
+        addRecipeInformation: true,
+        fillIngredients: true,
       }
-    )
+      if (cuisine) params.cuisine = cuisine
+      if (diet) params.diet = diet
+      if (maxReadyTime) params.maxReadyTime = Number(maxReadyTime)
 
-    const recipes = response.data.map((r: any) => ({
-      id: r.id,
-      title: r.title,
-      image: r.image,
-      usedCount: r.usedIngredientCount,
-      missedCount: r.missedIngredientCount,
-      missedIngredients: r.missedIngredients.map((m: any) => m.original),
-      usedIngredients: r.usedIngredients.map((u: any) => u.original),
-      matchPercent: Math.round((r.usedIngredientCount / (r.usedIngredientCount + r.missedIngredientCount)) * 100)
-    }))
+      response = await axios.get(
+        'https://api.spoonacular.com/recipes/complexSearch',
+        { params }
+      )
 
-    recipes.sort((a: any, b: any) => b.matchPercent - a.matchPercent)
-    res.json({ recipes, analyzedIngredients: clean })
+      const recipes = (response.data.results || []).map((r: any) => {
+        const used = (r.usedIngredients || []).map((u: any) => u.original)
+        const missed = (r.missedIngredients || []).map((m: any) => m.original)
+        const total = used.length + missed.length
+        return {
+          id: r.id,
+          title: r.title,
+          image: r.image,
+          usedCount: used.length,
+          missedCount: missed.length,
+          missedIngredients: missed,
+          usedIngredients: used,
+          matchPercent: total > 0 ? Math.round((used.length / total) * 100) : 0,
+          readyInMinutes: r.readyInMinutes,
+          servings: r.servings,
+        }
+      })
+
+      recipes.sort((a: any, b: any) => b.matchPercent - a.matchPercent)
+      res.json({ recipes, analyzedIngredients: clean })
+    } else {
+      // ── Standard search via findByIngredients ───────────────────────────────
+      response = await axios.get(
+        'https://api.spoonacular.com/recipes/findByIngredients',
+        {
+          params: {
+            ingredients: clean.join(','),
+            number: 8,
+            ranking: 2,
+            ignorePantry: true,
+            apiKey: SPOONACULAR_KEY
+          }
+        }
+      )
+
+      const recipes = response.data.map((r: any) => ({
+        id: r.id,
+        title: r.title,
+        image: r.image,
+        usedCount: r.usedIngredientCount,
+        missedCount: r.missedIngredientCount,
+        missedIngredients: r.missedIngredients.map((m: any) => m.original),
+        usedIngredients: r.usedIngredients.map((u: any) => u.original),
+        matchPercent: Math.round((r.usedIngredientCount / (r.usedIngredientCount + r.missedIngredientCount)) * 100)
+      }))
+
+      recipes.sort((a: any, b: any) => b.matchPercent - a.matchPercent)
+      res.json({ recipes, analyzedIngredients: clean })
+    }
   } catch (err: any) {
     console.error('Spoonacular error:', err.response?.data || err.message)
     res.status(500).json({ error: 'Recipe search failed', detail: err.response?.data })

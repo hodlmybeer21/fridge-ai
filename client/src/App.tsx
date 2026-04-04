@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 
-// Use VPS API in production (Vercel static hosting has no server)
-// In dev, Vite proxies /api to localhost:3001
-const API = (import.meta.env.VITE_API_BASE as string) || '/api'
+// API base: relative /api routes work in both dev (Vite proxy) and prod (Vercel serverless functions)
+const API = ''
 
   id: number
   title: string
