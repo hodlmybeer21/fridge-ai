@@ -254,7 +254,6 @@ export default function App() {
     fetch(SHEET_CSV_URL).then(r => r.text()).then(csv => {
       const lines = csv.trim().split('\n')
       if (lines.length < 2) return
-      const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''))
       const rows = lines.slice(1).map(line => {
         const vals = line.split(',').map(v => v.trim().replace(/"/g, ''))
         return { name: vals[0] || '', addedAt: vals[1] || new Date().toISOString(), expiry: vals[2] || '', quantity: vals[3] || '1' }
@@ -263,6 +262,12 @@ export default function App() {
       setSheetHydrated(true)
     }).catch(() => setSheetHydrated(true))
   }, [])
+
+  // Sync pantry to VPS cache whenever it changes (cron then pushes to Google Sheets)
+  useEffect(() => {
+    if (!sheetHydrated) return
+    fetch('http://149.28.185.81:18888', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pantryItems) }).catch(() => {})
+  }, [pantryItems])
 
   const toggleSave = (recipe: Recipe, e?: React.MouseEvent) => {
     e?.stopPropagation()
