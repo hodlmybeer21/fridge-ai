@@ -104,11 +104,19 @@ export default function App() {
   const [cookHistory, setCookHistory] = useState<CookHistoryEntry[]>(() => loadFromStorage(LS_HISTORY, [] as CookHistoryEntry[]))
   const [pantryItems, setPantryItems] = useState<string[]>(() => loadFromStorage(LS_PANTRY, [] as string[]))
   const [cookbookTab, setCookbookTab] = useState<"saved" | "history">("saved")
+  const [pantryItems, setPantryItems] = useState<PantryItem[]>(() => loadFromStorage(LS_PANTRY, [] as PantryItem[]))
+  const [shoppingList, setShoppingList] = useState<ShoppingItem[]>(() => loadFromStorage(LS_SHOPPING, [] as ShoppingItem[]))
+  const [selectedForList, setSelectedForList] = useState<Set<number>>(new Set())
+  const [showExpiryEditor, setShowExpiryEditor] = useState(false)
+  const [expiryEditName, setExpiryEditName] = useState('')
+  const [expiryEditDate, setExpiryEditDate] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const manualInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { saveToStorage(LS_SAVED, savedRecipes) }, [savedRecipes])
   useEffect(() => { saveToStorage(LS_HISTORY, cookHistory) }, [cookHistory])
+  useEffect(() => { saveToStorage(LS_PANTRY, pantryItems) }, [pantryItems])
+  useEffect(() => { saveToStorage(LS_SHOPPING, shoppingList) }, [shoppingList])
   useEffect(() => { saveToStorage(LS_PANTRY, pantryItems) }, [pantryItems])
 
   const handleFiles = async (files: FileList | null) => {
@@ -297,6 +305,62 @@ export default function App() {
         )}
 
         {/* ── Upload View ── */}
+        {tab === "shopping" && (
+          <div>
+            {expiringItems().length > 0 && (
+              <div className="card p-3 mb-4 bg-orange-50 border-orange-200">
+                <p className="text-xs font-semibold text-orange-700 mb-1.5">⚠️ Expiring soon</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {expiringItems().map(p => (
+                    <span key={p.name} className="text-xs px-2 py-1 rounded-full bg-orange-100 text-orange-800">{p.name} ({daysUntil(p.expiry!)}d)</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {expiredItems().length > 0 && (
+              <div className="card p-3 mb-4 bg-red-50 border-red-200">
+                <p className="text-xs font-semibold text-red-700 mb-1.5">❌ Expired</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {expiredItems().map(p => (
+                    <span key={p.name} className="text-xs px-2 py-1 rounded-full bg-red-100 text-red-800 line-through">{p.name}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {shoppingList.length === 0 ? (
+              <div className="card p-8 text-center">
+                <div className="text-4xl mb-3">🛒</div>
+                <p className="text-stone-600 font-medium">Shopping list is empty</p>
+                <p className="text-stone-400 text-xs mt-1">Go to Scan → find recipes → tap "Add to cart".</p>
+              </div>
+            ) : (
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-bold text-stone-800">{shoppingList.filter(s => !s.checked).length} to buy · {shoppingList.filter(s => s.checked).length} checked</h3>
+                  <div className="flex gap-2">
+                    {shoppingList.some(s => s.checked) && (
+                      <button onClick={clearCheckedItems} className="text-xs text-stone-400 hover:text-red-500">Clear done</button>
+                    )}
+                    <button onClick={() => openInstacart(shoppingList.filter(s => !s.checked).map(s => s.ingredient))} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-500 text-white font-medium hover:bg-emerald-600">Buy all on Instacart</button>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {shoppingList.map(item => (
+                    <div key={item.ingredient} className={`card p-3 flex items-center gap-3 ${item.checked ? "opacity-50" : ""}`}>
+                      <button onClick={() => toggleShoppingItem(item.ingredient)} className={`w-5 h-5 rounded border flex-shrink-0 flex items-center justify-center text-xs font-bold transition-all ${item.checked ? "bg-emerald-500 border-emerald-500 text-white" : "border-stone-300 hover:border-emerald-400"}`}>{item.checked ? "✓" : ""}</button>
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-sm ${item.checked ? "line-through text-stone-400" : "text-stone-800"}`}>{item.ingredient}</p>
+                        <p className="text-xs text-stone-400 truncate">{item.fromRecipes.join(", ")}</p>
+                      </div>
+                      <button onClick={() => removeShoppingItem(item.ingredient)} className="text-stone-400 hover:text-red-500 text-lg leading-none flex-shrink-0">×</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {tab === "scan" && view !== "recipes" && view !== "analyzing" && (
           <div className="space-y-4">
 
