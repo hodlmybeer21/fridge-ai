@@ -102,7 +102,6 @@ export default function App() {
   const [manualInput, setManualInput] = useState("")
   const [savedRecipes, setSavedRecipes] = useState<Recipe[]>(() => loadFromStorage(LS_SAVED, [] as Recipe[]))
   const [cookHistory, setCookHistory] = useState<CookHistoryEntry[]>(() => loadFromStorage(LS_HISTORY, [] as CookHistoryEntry[]))
-  const [pantryItems, setPantryItems] = useState<string[]>(() => loadFromStorage(LS_PANTRY, [] as string[]))
   const [cookbookTab, setCookbookTab] = useState<"saved" | "history">("saved")
   const [pantryItems, setPantryItems] = useState<PantryItem[]>(() => loadFromStorage(LS_PANTRY, [] as PantryItem[]))
   const [shoppingList, setShoppingList] = useState<ShoppingItem[]>(() => loadFromStorage(LS_SHOPPING, [] as ShoppingItem[]))
@@ -115,7 +114,6 @@ export default function App() {
 
   useEffect(() => { saveToStorage(LS_SAVED, savedRecipes) }, [savedRecipes])
   useEffect(() => { saveToStorage(LS_HISTORY, cookHistory) }, [cookHistory])
-  useEffect(() => { saveToStorage(LS_PANTRY, pantryItems) }, [pantryItems])
   useEffect(() => { saveToStorage(LS_SHOPPING, shoppingList) }, [shoppingList])
   useEffect(() => { saveToStorage(LS_PANTRY, pantryItems) }, [pantryItems])
 
@@ -224,6 +222,60 @@ export default function App() {
 
   const hasActiveFilters = Object.values(filters).some(v => v !== "" && v !== 0)
 
+
+  const daysUntil = (dateStr: string) => {
+    const today = new Date(); today.setHours(0,0,0,0)
+    const d = new Date(dateStr); d.setHours(0,0,0,0)
+    return Math.round((d.getTime() - today.getTime()) / 86400000)
+  }
+  const expiringItems = () => pantryItems.filter(p => p.expiry && daysUntil(p.expiry) >= 0 && daysUntil(p.expiry) <= 3)
+  const expiredItems = () => pantryItems.filter(p => p.expiry && daysUntil(p.expiry) < 0)
+  const saveAllToPantry = () => {
+    setPantryItems(prev => {
+      const existing = new Set(prev.map(p => p.name.toLowerCase()))
+      return [...prev, ...allIngredients.map(name => ({ name, addedAt: new Date().toISOString() })).filter(n => !existing.has(n.name.toLowerCase()))]
+    })
+  }
+  const openExpiryEditor = (name: string) => {
+    const ex = pantryItems.find(p => p.name.toLowerCase() === name.toLowerCase())
+    setExpiryEditName(name); setExpiryEditDate(ex?.expiry || ''); setShowExpiryEditor(true)
+  }
+  const saveExpiry = () => {
+    setPantryItems(prev => {
+      const idx = prev.findIndex(p => p.name.toLowerCase() === expiryEditName.toLowerCase())
+      if (idx >= 0) { const u = [...prev]; u[idx] = {...u[idx], expiry: expiryEditDate || undefined}; return u }
+      return [...prev, { name: expiryEditName, expiry: expiryEditDate || undefined, addedAt: new Date().toISOString() }]
+    })
+    setShowExpiryEditor(false)
+  }
+  const addRecipeToList = (recipe: Recipe) => {
+    setShoppingList(prev => {
+      const ni = recipe.missedIngredients.filter(ing => !prev.some(s => s.ingredient.toLowerCase() === ing.toLowerCase()))
+        .map(ing => ({ ingredient: ing, fromRecipes: [recipe.title], checked: false }))
+      return [...prev, ...ni]
+    })
+  }
+  const addSelectedRecipesToList = () => {
+    const sel = recipes.filter(r => selectedForList.has(r.id))
+    setShoppingList(prev => {
+      let u = [...prev]
+      for (const recipe of sel) {
+        for (const ing of recipe.missedIngredients) {
+          const idx = u.findIndex(s => s.ingredient.toLowerCase() === ing.toLowerCase())
+          if (idx >= 0) { if (!u[idx].fromRecipes.includes(recipe.title)) { u[idx] = {...u[idx], fromRecipes: [...u[idx].fromRecipes, recipe.title]} } }
+          else { u = [...u, { ingredient: ing, fromRecipes: [recipe.title], checked: false }] }
+        }
+      }
+      return u
+    })
+    setSelectedForList(new Set())
+  }
+  const toggleShoppingItem = (ing: string) => setShoppingList(prev => prev.map(s => s.ingredient === ing ? {...s, checked: !s.checked} : s))
+  const removeShoppingItem = (ing: string) => setShoppingList(prev => prev.filter(s => s.ingredient !== ing))
+  const clearCheckedItems = () => setShoppingList(prev => prev.filter(s => !s.checked))
+  const isInShoppingList = (ing: string) => shoppingList.some(s => s.ingredient.toLowerCase() === ing.toLowerCase())
+  const toggleSelectedForList = (id: number) => { setSelectedForList(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s }) }
+
   return (
     <div className="min-h-screen bg-stone-50">
       {/* Header */}
@@ -232,6 +284,7 @@ export default function App() {
           <div><h1 className="text-lg font-bold text-stone-900">FridgeAI</h1><p className="text-xs text-stone-400">What&apos;s for dinner?</p></div>
           <div className="flex items-center gap-1">
             <button onClick={() => setTab("scan")} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${tab === "scan" ? "bg-emerald-100 text-emerald-700" : "text-stone-400 hover:text-stone-600"}`}>📷 Scan</button>
+            <button onClick={() => setTab("shopping")} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-1 ${tab === "shopping" ? "bg-emerald-100 text-emerald-700" : "text-stone-400 hover:text-stone-600"}`}>🛒 Cart {shoppingList.filter(s => !s.checked).length > 0 && <span className="text-xs">({shoppingList.filter(s => !s.checked).length})</span>}</button>
             <button onClick={() => setTab("cookbook")} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${tab === "cookbook" ? "bg-emerald-100 text-emerald-700" : "text-stone-400 hover:text-stone-600"}`}>📖 Cookbook {savedRecipes.length > 0 && <span className="text-xs">({savedRecipes.length})</span>}</button>
           </div>
         </div>
@@ -249,10 +302,10 @@ export default function App() {
                   <button onClick={() => setPantryItems([])} className="text-xs text-stone-400 hover:text-red-500">Clear</button>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mb-3">
-                  {pantryItems.slice(0, 24).map(i => <span key={i} className="text-xs px-2 py-1 rounded-full bg-white text-stone-600 border border-amber-200">{i}</span>)}
+                  {pantryItems.slice(0, 24).map(p => <span key={p.name} onClick={() => openExpiryEditor(p.name)} className={`text-xs px-2 py-1 rounded-full border cursor-pointer transition-all ${expiredItems().some(e => e.name === p.name) ? "bg-red-100 text-red-800 border-red-200 line-through" : expiringItems().some(e => e.name === p.name) ? "bg-orange-100 text-orange-800 border-orange-200" : "bg-white text-stone-600 border-amber-200 hover:border-amber-400"}`}>{p.name}{p.expiry ? ` (${daysUntil(p.expiry) >= 0 ? daysUntil(p.expiry) + "d" : "exp"})` : ""}</span>)}
                   {pantryItems.length > 24 && <span className="text-xs text-stone-400">+{pantryItems.length - 24} more</span>}
                 </div>
-                <button className="w-full py-2 rounded-xl bg-stone-800 text-white text-sm font-medium hover:bg-stone-900 transition-all" onClick={() => { setManualIngredients(prev => [...new Set([...prev, ...pantryItems])]); setTab("scan"); setPhotos([]); setView("upload") }}>🔍 Search with pantry</button>
+                <button className="w-full py-2 rounded-xl bg-stone-800 text-white text-sm font-medium hover:bg-stone-900 transition-all" onClick={() => { setManualIngredients(prev => [...new Set([...prev, ...pantryItems.map(p => p.name)])]); setTab("scan"); setPhotos([]); setView("upload") }}>🔍 Search with pantry</button>
               </div>
             )}
             <div className="flex gap-2 mb-4">
@@ -367,7 +420,7 @@ export default function App() {
             {pantryItems.length > 0 && (
               <div className="card p-3 bg-amber-50 border-amber-200 flex items-center justify-between">
                 <span className="text-sm text-amber-800">🥗 Pantry has {pantryItems.length} items</span>
-                <button className="text-xs text-amber-700 hover:text-amber-900 font-medium" onClick={() => setManualIngredients(prev => [...new Set([...prev, ...pantryItems])])}>+ Add to scan</button>
+                <button className="text-xs text-amber-700 hover:text-amber-900 font-medium" onClick={() => setManualIngredients(prev => [...new Set([...prev, ...pantryItems.map(p => p.name)])])}>+ Add to scan</button>
               </div>
             )}
 
@@ -535,9 +588,16 @@ export default function App() {
               <p className="text-xs text-stone-400 mb-2">{photos.length} areas · {allIngredients.length} ingredients</p>
               <div className="flex flex-wrap gap-1.5 mb-3">{allIngredients.map(i => <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-stone-200 text-stone-600">{i}</span>)}</div>
               {allIngredients.length > 0 && (
-                <button onClick={() => { setPantryItems(prev => [...new Set([...prev, ...allIngredients])]) }} className="text-xs text-emerald-600 hover:text-emerald-700 font-medium">+ Save all to pantry</button>
+                <button onClick={saveAllToPantry} className="text-xs text-emerald-600 hover:text-emerald-700 font-medium">+ Save all to pantry</button>
               )}
             </div>
+
+            {selectedForList.size > 0 && (
+              <div className="card p-3 mb-4 bg-teal-50 border border-teal-200 flex items-center justify-between gap-3">
+                <p className="text-sm text-teal-700 font-medium">{selectedForList.size} selected</p>
+                <button onClick={addSelectedRecipesToList} className="text-xs px-3 py-1.5 rounded-lg bg-teal-600 text-white font-medium hover:bg-teal-700">🛒 Add all to cart</button>
+              </div>
+            )}
 
             <div className="h-px bg-stone-200 my-5" />
             <h3 className="font-bold text-stone-800 mb-3">{recipes.length} recipes you can make</h3>
@@ -557,6 +617,7 @@ export default function App() {
                       </div>
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <button className="text-xs px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-700 font-medium hover:bg-emerald-200 transition-all" onClick={() => openRecipeDetail(recipe)}>View</button>
+                        <button onClick={() => toggleSelectedForList(recipe.id)} className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-all ${selectedForList.has(recipe.id) ? "bg-teal-100 text-teal-700 border border-teal-300" : "bg-stone-100 text-stone-600 hover:bg-stone-200"}`}>{selectedForList.has(recipe.id) ? "✓ In cart" : "+ Cart"}</button>
                         <button className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-all ${isSaved(recipe.id) ? "bg-amber-200 text-amber-800" : "bg-stone-100 text-stone-600 hover:bg-stone-200"}`} onClick={(e) => toggleSave(recipe, e)}>
                           {isSaved(recipe.id) ? "★ Saved" : "☆ Save"}
                         </button>
@@ -624,13 +685,21 @@ export default function App() {
                     ))}
                   </div>
                 </div>
-                <button
-                  onClick={() => openInstacart(selectedRecipe.missedIngredients)}
-                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 text-white font-semibold text-sm hover:from-teal-600 hover:to-emerald-600 transition-all flex items-center justify-center gap-2"
-                >
-                  <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor"><path d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.3 2.3c-.6.6-.2 1.7.6 1.7H17M17 17a2 2 0 100-4 2 2 0 000 4zM9 17a2 2 0 100-4 2 2 0 000 4z"/></svg>
-                  Buy missing ingredients on Instacart
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => addRecipeToList(selectedRecipe)}
+                    className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ${isInShoppingList(selectedRecipe.missedIngredients[0]) ? "bg-teal-100 text-teal-700 border border-teal-300" : "bg-teal-500 text-white hover:bg-teal-600"}`}
+                  >
+                    {isInShoppingList(selectedRecipe.missedIngredients[0]) ? "✓ In cart" : "🛒 Add to cart"}
+                  </button>
+                  <button
+                    onClick={() => openInstacart(selectedRecipe.missedIngredients)}
+                    className="flex-1 py-2.5 rounded-xl bg-stone-800 text-white font-semibold text-sm hover:bg-stone-900 transition-all flex items-center justify-center gap-2"
+                  >
+                    <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor"><path d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.3 2.3c-.6.6-.2 1.7.6 1.7H17M17 17a2 2 0 100-4 2 2 0 000 4zM9 17a2 2 0 100-4 2 2 0 000 4z"/></svg>
+                    Instacart
+                  </button>
+                </div>
               </div>
             )}
 
@@ -678,6 +747,34 @@ export default function App() {
               >
                 🍽 Made it
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+ 
+      {showExpiryEditor && (
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          onClick={e => e.target === e.currentTarget && setShowExpiryEditor(false)}
+        >
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm">
+            <h3 className="font-bold text-stone-900 mb-1">Set expiry date</h3>
+            <p className="text-sm text-stone-500 mb-4">{expiryEditName}</p>
+            <input
+              type="date"
+              value={expiryEditDate}
+              onChange={e => setExpiryEditDate(e.target.value)}
+              className="w-full px-3 py-2 border border-stone-200 rounded-xl text-sm focus:outline-none focus:border-emerald-400 mb-4"
+            />
+            <div className="flex gap-2">
+              <button
+                className="flex-1 py-2.5 rounded-xl bg-stone-100 text-stone-600 text-sm font-medium hover:bg-stone-200 transition-all"
+                onClick={() => setShowExpiryEditor(false)}
+              >Cancel</button>
+              <button
+                className="flex-1 py-2.5 rounded-xl bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 transition-all"
+                onClick={saveExpiry}
+              >Save</button>
             </div>
           </div>
         </div>

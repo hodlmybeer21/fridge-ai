@@ -1,0 +1,26 @@
+#!/bin/bash
+# FridgeAI Promo Video — Vertical 9:16 Instagram Reels / TikTok
+# Uses Ken Burns zoom + text overlays on the app screenshot
+
+SCREEN="/root/.openclaw/workspace/fridge-ai/marketing/screens/02-upload-flow.png"
+AUDIO="/tmp/silence.mp3"
+OUT="/root/.openclaw/workspace/fridge-ai/marketing/screens/fridgeai-promo.mp4"
+
+# Create a silent audio track (2 seconds, for testing)
+ffmpeg -f lavfi -i "anullsrc=r=44100:cl=stereo" -t 2 -q:a 9 -acodec libmp3lame "$AUDIO" 2>/dev/null
+
+# Frame 1: App home — Ken Burns zoom + title
+ffmpeg -y -loop 1 -i "$SCREEN" -i "$AUDIO" \
+  -filter_complex "
+    [0:v]scale=1170:-1,
+    zoompan=z='min(zoom+0.0008,1.15)':d=90:x=50:y=50:s=780:844:enable='between(t,0,2.5)',
+    drawtext=text='What's for dinner?':fontcolor=ffffff:fontsize=56:fontweight=bold:x=(w-text_w)/2:y=(h-text-h)/2-80:borderw=3:bordercolor=black@0.5:enable='between(t,0,2.5)',
+    drawtext=text='Take a photo of your fridge.':fontcolor=ffffff:fontsize=32:x=(w-text_w)/2:y=(h-text-h)/2+20:borderw=2:bordercolor=black@0.5:enable='between(t,0.5,2.5)',
+    drawtext=text='Get recipes for what you already have.':fontcolor=10B981:fontsize=32:x=(w-text_w)/2:y=(h-text-h)/2+70:borderw=2:bordercolor=black@0.5:enable='between(t,1,2.5)',
+    format=yuv420p[v]
+  " \
+  -map "[v]" -map 0:a -t 2.5 -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k \
+  "$OUT" 2>&1 | tail -5
+
+ls -lh "$OUT" 2>/dev/null
+echo "Done: $OUT"
