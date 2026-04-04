@@ -263,12 +263,6 @@ export default function App() {
     }).catch(() => setSheetHydrated(true))
   }, [])
 
-  // Sync pantry to VPS cache whenever it changes (cron then pushes to Google Sheets)
-  useEffect(() => {
-    if (!sheetHydrated) return
-    fetch('http://149.28.185.81:18888', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pantryItems) }).catch(() => {})
-  }, [pantryItems])
-
   const toggleSave = (recipe: Recipe, e?: React.MouseEvent) => {
     e?.stopPropagation()
     if (isSaved(recipe.id)) { setSavedRecipes(prev => prev.filter(r => r.id !== recipe.id)) }
