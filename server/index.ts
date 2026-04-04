@@ -85,9 +85,9 @@ app.post('/api/analyze', async (req, res) => {
   }
 })
 
-// ── Spoonacular Recipe Search ───────────────────────────────────────────────
+// ── Spoonacular Recipe Search (with optional filters) ──────────────────────
 app.post('/api/recipes', async (req, res) => {
-  const { ingredients } = req.body
+  const { ingredients, cuisine, diet, maxReadyTime } = req.body
   if (!ingredients || !Array.isArray(ingredients) || ingredients.length === 0) {
     return res.status(400).json({ error: 'ingredients array required' })
   }
@@ -105,34 +105,82 @@ app.post('/api/recipes', async (req, res) => {
   }
 
   try {
-    const response = await axios.get(
-      'https://api.spoonacular.com/recipes/findByIngredients',
-      {
-        params: {
-          ingredients: clean.join(','),
-          number: 8,
-          ranking: 2, // maximize used ingredients
-          ignorePantry: true,
-          apiKey: SPOONACULAR_KEY
-        }
+    // Use complexSearch when filters are present, findByIngredients otherwise
+    const hasFilters = cuisine || diet || maxReadyTime
+
+    let response: any
+
+    if (hasFilters) {
+      // ── Filtered search via complexSearch ────────────────────────────────
+      const params: any = {
+        includeIngredients: clean.join(','),
+        number: 12,
+        ranking: 2,
+        ignorePantry: true,
+        apiKey: SPOONACULAR_KEY,
+        addRecipeInformation: true,
+        fillIngredients: true,
       }
-    )
+      if (cuisine) params.cuisine = cuisine
+      if (diet) params.diet = diet
+      if (maxReadyTime) params.maxReadyTime = Number(maxReadyTime)
 
-    const recipes = response.data.map((r: any) => ({
-      id: r.id,
-      title: r.title,
-      image: r.image,
-      usedCount: r.usedIngredientCount,
-      missedCount: r.missedIngredientCount,
-      missedIngredients: r.missedIngredients.map((m: any) => m.original),
-      usedIngredients: r.usedIngredients.map((u: any) => u.original),
-      matchPercent: Math.round((r.usedIngredientCount / (r.usedIngredientCount + r.missedIngredientCount)) * 100)
-    }))
+      response = await axios.get(
+        'https://api.spoonacular.com/recipes/complexSearch',
+        { params }
+      )
 
-    // Sort by match percentage
-    recipes.sort((a: any, b: any) => b.matchPercent - a.matchPercent)
+      const recipes = (response.data.results || []).map((r: any) => {
+        const used = (r.usedIngredients || []).map((u: any) => u.original)
+        const missed = (r.missedIngredients || []).map((m: any) => m.original)
+        const total = used.length + missed.length
+        return {
+          id: r.id,
+          title: r.title,
+          image: r.image,
+          usedCount: used.length,
+          missedCount: missed.length,
+          missedIngredients: missed,
+          usedIngredients: used,
+          matchPercent: total > 0 ? Math.round((used.length / total) * 100) : 0,
+          readyInMinutes: r.readyInMinutes,
+          servings: r.servings,
+          cuisines: r.cuisines,
+          diets: r.diets,
+        }
+      })
 
-    res.json({ recipes, analyzedIngredients: clean })
+      recipes.sort((a: any, b: any) => b.matchPercent - a.matchPercent)
+      res.json({ recipes, analyzedIngredients: clean, filterApplied: true })
+    } else {
+      // ── Standard search via findByIngredients ────────────────────────────
+      response = await axios.get(
+        'https://api.spoonacular.com/recipes/findByIngredients',
+        {
+          params: {
+            ingredients: clean.join(','),
+            number: 8,
+            ranking: 2,
+            ignorePantry: true,
+            apiKey: SPOONACULAR_KEY
+          }
+        }
+      )
+
+      const recipes = response.data.map((r: any) => ({
+        id: r.id,
+        title: r.title,
+        image: r.image,
+        usedCount: r.usedIngredientCount,
+        missedCount: r.missedIngredientCount,
+        missedIngredients: r.missedIngredients.map((m: any) => m.original),
+        usedIngredients: r.usedIngredients.map((u: any) => u.original),
+        matchPercent: Math.round((r.usedIngredientCount / (r.usedIngredientCount + r.missedIngredientCount)) * 100)
+      }))
+
+      recipes.sort((a: any, b: any) => b.matchPercent - a.matchPercent)
+      res.json({ recipes, analyzedIngredients: clean, filterApplied: false })
+    }
   } catch (err: any) {
     console.error('Spoonacular error:', err.response?.data || err.message)
     res.status(500).json({ error: 'Recipe search failed', detail: err.response?.data })

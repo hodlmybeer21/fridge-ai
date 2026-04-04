@@ -1,9 +1,7 @@
 {
-  "framework": "vite",
+  "framework": null,
   "buildCommand": "npm run build",
   "outputDirectory": "dist/client",
-  "installCommand": "npm install",
-  "devCommand": "npm run dev",
   "rewrites": [],
   "headers": [
     { "source": "/api/(.*)", "headers": [{ "key": "Access-Control-Allow-Origin", "value": "*" }] }

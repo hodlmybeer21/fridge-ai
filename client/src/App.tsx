@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 
 type Recipe = {
   id: number
@@ -7,7 +7,10 @@ type Recipe = {
   usedCount: number
   missedCount: number
   missedIngredients: string[]
+  usedIngredients: string[]
   matchPercent: number
+  readyInMinutes?: number
+  servings?: number
 }
 
 type Area = 'fridge' | 'freezer' | 'pantry' | 'grocery'
@@ -21,11 +24,35 @@ type Photo = {
   error?: string
 }
 
+type Filters = {
+  cuisine: string
+  diet: string
+  maxReadyTime: number
+}
+
+type CookHistoryEntry = {
+  id: number
+  title: string
+  image: string
+  cookedAt: string
+  matchPercent: number
+}
+
+const CUISINES = ["Any","Italian","Mexican","Chinese","Indian","American","Japanese","Thai","Mediterranean","French","Korean","Vietnamese"]
+const DIETS = ["Any","Vegetarian","Vegan","Gluten Free","Dairy Free","Ketogenic","Paleo","Pescatarian"]
+const MAX_TIMES = [
+  { label: "Any", value: 0 },
+  { label: "15 min", value: 15 },
+  { label: "30 min", value: 30 },
+  { label: "45 min", value: 45 },
+  { label: "60 min", value: 60 },
+]
+
 const AREAS: { value: Area; label: string; emoji: string }[] = [
-  { value: 'fridge', label: 'Fridge', emoji: '🧊' },
-  { value: 'freezer', label: 'Freezer', emoji: '❄️' },
-  { value: 'pantry', label: 'Pantry', emoji: '🫙' },
-  { value: 'grocery', label: 'Grocery Haul', emoji: '🛒' },
+  { value: "fridge", label: "Fridge", emoji: "🧊" },
+  { value: "freezer", label: "Freezer", emoji: "❄️" },
+  { value: "pantry", label: "Pantry", emoji: "🫙" },
+  { value: "grocery", label: "Grocery Haul", emoji: "🛒" },
 ]
 
 function fileToDataUrl(file: File): Promise<string> {
@@ -37,294 +64,351 @@ function fileToDataUrl(file: File): Promise<string> {
   })
 }
 
+function loadFromStorage<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as T) : fallback
+  } catch { return fallback }
+}
+
+function saveToStorage<T>(key: string, value: T) {
+  try { localStorage.setItem(key, JSON.stringify(value)) } catch {}
+}
+
+const LS_SAVED = "fridgeai_saved"
+const LS_HISTORY = "fridgeai_history"
+const LS_PANTRY = "fridgeai_pantry"
+
 export default function App() {
+  const [tab, setTab] = useState<"scan" | "cookbook">("scan")
   const [photos, setPhotos] = useState<Photo[]>([])
-  const [selectedArea, setSelectedArea] = useState<Area>('fridge')
+  const [manualIngredients, setManualIngredients] = useState<string[]>([])
+  const [selectedArea, setSelectedArea] = useState<Area>("fridge")
   const [recipes, setRecipes] = useState<Recipe[]>([])
   const [allIngredients, setAllIngredients] = useState<string[]>([])
-  const [view, setView] = useState<'upload' | 'analyzing' | 'recipes' | 'error'>('upload')
-  const [error, setError] = useState('')
+  const [view, setView] = useState<"upload" | "analyzing" | "recipes" | "error">("upload")
+  const [error, setError] = useState("")
   const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null)
   const [recipeDetail, setRecipeDetail] = useState<any>(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
+  const [filters, setFilters] = useState<Filters>({ cuisine: "", diet: "", maxReadyTime: 0 })
+  const [showFilters, setShowFilters] = useState(false)
+  const [editingPhotoId, setEditingPhotoId] = useState<string | null>(null)
+  const [editText, setEditText] = useState("")
+  const [showManualAdd, setShowManualAdd] = useState(false)
+  const [manualInput, setManualInput] = useState("")
+  const [savedRecipes, setSavedRecipes] = useState<Recipe[]>(() => loadFromStorage(LS_SAVED, [] as Recipe[]))
+  const [cookHistory, setCookHistory] = useState<CookHistoryEntry[]>(() => loadFromStorage(LS_HISTORY, [] as CookHistoryEntry[]))
+  const [pantryItems, setPantryItems] = useState<string[]>(() => loadFromStorage(LS_PANTRY, [] as string[]))
+  const [cookbookTab, setCookbookTab] = useState<"saved" | "history">("saved")
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const manualInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => { saveToStorage(LS_SAVED, savedRecipes) }, [savedRecipes])
+  useEffect(() => { saveToStorage(LS_HISTORY, cookHistory) }, [cookHistory])
+  useEffect(() => { saveToStorage(LS_PANTRY, pantryItems) }, [pantryItems])
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return
     const file = files[0]
-    if (!file.type.startsWith('image/')) {
-      setError('Please upload an image file.')
-      setView('error')
-      return
-    }
+    if (!file.type.startsWith("image/")) { setError("Please upload an image file."); setView("error"); return }
     const dataUrl = await fileToDataUrl(file)
     const id = Math.random().toString(36).slice(2)
-
-    const newPhoto: Photo = {
-      id,
-      area: selectedArea,
-      dataUrl,
-      ingredients: [],
-      analyzing: true,
-    }
-
+    const newPhoto: Photo = { id, area: selectedArea, dataUrl, ingredients: [], analyzing: true }
     setPhotos(prev => [...prev, newPhoto])
     analyzePhoto(id, dataUrl)
   }
 
   const analyzePhoto = async (id: string, dataUrl: string) => {
     try {
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageUrl: dataUrl })
-      })
+      const res = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageUrl: dataUrl }) })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Analysis failed')
-
-      setPhotos(prev => prev.map(p =>
-        p.id === id
-          ? { ...p, ingredients: data.ingredients || [], analyzing: false }
-          : p
-      ))
-    } catch (err: any) {
-      setPhotos(prev => prev.map(p =>
-        p.id === id
-          ? { ...p, analyzing: false, error: err.message }
-          : p
-      ))
-    }
+      if (!res.ok) throw new Error(data.error || "Analysis failed")
+      setPhotos(prev => prev.map(p => p.id === id ? { ...p, ingredients: data.ingredients || [], analyzing: false } : p))
+    } catch (err: any) { setPhotos(prev => prev.map(p => p.id === id ? { ...p, analyzing: false, error: err.message } : p)) }
   }
 
-  const removePhoto = (id: string) => {
-    setPhotos(prev => prev.filter(p => p.id !== id))
+  const removePhoto = (id: string) => setPhotos(prev => prev.filter(p => p.id !== id))
+
+  const startEditPhoto = (photo: Photo) => { setEditingPhotoId(photo.id); setEditText(photo.ingredients.join(", ")) }
+
+  const saveEditPhoto = (photoId: string) => {
+    setPhotos(prev => prev.map(p => p.id === photoId ? { ...p, ingredients: editText.split(",").map(i => i.trim()).filter(Boolean) } : p))
+    setEditingPhotoId(null); setEditText("")
+  }
+
+  const addManualIngredient = () => {
+    const raw = manualInput.split(",").map(i => i.trim()).filter(Boolean)
+    setManualIngredients(prev => [...new Set([...prev, ...raw])])
+    setManualInput(""); manualInputRef.current?.focus()
+  }
+
+  const removeManualIngredient = (ing: string) => setManualIngredients(prev => prev.filter(i => i !== ing))
+
+  const buildIngredients = () => {
+    const fromPhotos = photos.flatMap(p => p.ingredients)
+    return [...new Set([...fromPhotos, ...manualIngredients].map(i => i.toLowerCase().trim()))]
   }
 
   const hasResults = photos.length > 0 && photos.every(p => !p.analyzing)
+  const totalIngredients = photos.reduce((sum, p) => sum + p.ingredients.length, 0) + manualIngredients.length
 
-  const findRecipes = async () => {
-    const ingredients = photos.flatMap(p => p.ingredients)
-    // Dedupe and clean
-    const unique = [...new Set(ingredients.map(i => i.toLowerCase().trim()))]
-
-    if (unique.length === 0) {
-      setError('No ingredients found. Try clearer photos with better lighting.')
-      setView('error')
-      return
-    }
-
-    setAllIngredients(unique)
-    setView('analyzing')
-
+  const findRecipes = async (overrides?: Partial<Filters>) => {
+    const unique = buildIngredients()
+    if (unique.length === 0) { setError("No ingredients found. Add items manually or try clearer photos."); setView("error"); return }
+    setAllIngredients(unique); setView("analyzing"); setShowFilters(false)
+    const activeFilters = { ...filters, ...overrides }
     try {
-      const res = await fetch('/api/recipes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ingredients: unique })
+      const res = await fetch("/api/recipes", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ingredients: unique,
+          cuisine: activeFilters.cuisine || undefined,
+          diet: activeFilters.diet || undefined,
+          maxReadyTime: activeFilters.maxReadyTime || undefined,
+        })
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Recipe search failed')
-      setRecipes(data.recipes || [])
-      setView('recipes')
-    } catch (err: any) {
-      setError(err.message || 'Something went wrong.')
-      setView('error')
-    }
+      if (!res.ok) throw new Error(data.error || "Recipe search failed")
+      setRecipes(data.recipes || []); setView("recipes")
+    } catch (err: any) { setError(err.message || "Something went wrong."); setView("error") }
   }
 
-  const reset = () => {
-    setPhotos([])
-    setRecipes([])
-    setAllIngredients([])
-    setView('upload')
-    setError('')
-    setSelectedRecipe(null)
-    setRecipeDetail(null)
+  const clearFilters = () => {
+    setFilters({ cuisine: "", diet: "", maxReadyTime: 0 })
+    findRecipes({ cuisine: "", diet: "", maxReadyTime: 0 } as Filters)
   }
 
-  const openInstacart = (ingredients: string[]) => {
-    const query = ingredients.map(i => i.replace(/[^a-zA-Z0-9 ]/g, '').trim()).join(', ')
-    const url = `https://www.instacart.com/store/search?q=${encodeURIComponent(query)}`
-    window.open(url, '_blank', 'noopener,noreferrer')
+  const isSaved = (id: number) => savedRecipes.some(r => r.id === id)
+
+  const toggleSave = (recipe: Recipe, e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    if (isSaved(recipe.id)) { setSavedRecipes(prev => prev.filter(r => r.id !== recipe.id)) }
+    else { setSavedRecipes(prev => prev.some(r => r.id === recipe.id) ? prev : [...prev, recipe]) }
+  }
+
+  const markCooked = (recipe: Recipe, e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    const entry: CookHistoryEntry = { id: recipe.id, title: recipe.title, image: recipe.image, cookedAt: new Date().toISOString(), matchPercent: recipe.matchPercent }
+    setCookHistory(prev => [entry, ...prev.filter(h => h.id !== recipe.id)])
   }
 
   const openRecipeDetail = async (recipe: Recipe) => {
-    setSelectedRecipe(recipe)
-    setRecipeDetail(null)
-    setLoadingDetail(true)
-    try {
-      const res = await fetch(`/api/recipes/${recipe.id}`)
-      const data = await res.json()
-      setRecipeDetail(data)
-    } catch {
-      setRecipeDetail({ error: 'Could not load recipe details' })
-    } finally {
-      setLoadingDetail(false)
-    }
+    setSelectedRecipe(recipe); setRecipeDetail(null); setLoadingDetail(true)
+    try { const res = await fetch(`/api/recipes/${recipe.id}`); const data = await res.json(); setRecipeDetail(data) }
+    catch { setRecipeDetail({ error: "Could not load recipe details" }) }
+    finally { setLoadingDetail(false) }
   }
 
-  const totalIngredients = photos.reduce((sum, p) => sum + p.ingredients.length, 0)
-  const analyzingCount = photos.filter(p => p.analyzing).length
+  const openInstacart = (ingredients: string[]) => {
+    const query = ingredients.map(i => i.replace(/[^a-zA-Z0-9 ]/g, "").trim()).join(", ")
+    window.open(`https://www.instacart.com/store/search?q=${encodeURIComponent(query)}`, "_blank", "noopener,noreferrer")
+  }
+
+  const reset = () => {
+    setPhotos([]); setManualIngredients([]); setRecipes([]); setAllIngredients([])
+    setView("upload"); setError(""); setSelectedRecipe(null); setRecipeDetail(null)
+    setFilters({ cuisine: "", diet: "", maxReadyTime: 0 }); setShowFilters(false)
+  }
+
+  const hasActiveFilters = Object.values(filters).some(v => v !== "" && v !== 0)
 
   return (
     <div className="min-h-screen bg-stone-50">
       {/* Header */}
-      <header className="bg-white border-b border-stone-100 sticky top-0 z-10">
-        <div className="max-w-lg mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-stone-900">FridgeAI</h1>
-            <p className="text-xs text-stone-400">What's for dinner?</p>
+      <header className="bg-white border-b border-stone-100 sticky top-0 z-20">
+        <div className="max-w-lg mx-auto px-4 py-3 flex items-center justify-between">
+          <div><h1 className="text-lg font-bold text-stone-900">FridgeAI</h1><p className="text-xs text-stone-400">What&apos;s for dinner?</p></div>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setTab("scan")} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${tab === "scan" ? "bg-emerald-100 text-emerald-700" : "text-stone-400 hover:text-stone-600"}`}>📷 Scan</button>
+            <button onClick={() => setTab("cookbook")} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${tab === "cookbook" ? "bg-emerald-100 text-emerald-700" : "text-stone-400 hover:text-stone-600"}`}>📖 Cookbook {savedRecipes.length > 0 && <span className="text-xs">({savedRecipes.length})</span>}</button>
           </div>
-          <div className="text-3xl">🥗</div>
         </div>
       </header>
 
-      <main className="max-w-lg mx-auto px-4 py-6">
+      <main className="max-w-lg mx-auto px-4 py-5">
 
-        {/* ── Upload View ── */}
-        {view === 'upload' && (
-          <div className="space-y-4">
-
-            {/* Area selector */}
-            <div>
-              <p className="text-sm font-medium text-stone-600 mb-2">What are you photographing?</p>
-              <div className="flex gap-2 flex-wrap">
-                {AREAS.map(a => (
-                  <button
-                    key={a.value}
-                    onClick={() => setSelectedArea(a.value)}
-                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
-                      selectedArea === a.value
-                        ? 'bg-emerald-100 text-emerald-700 border border-emerald-300'
-                        : 'bg-white text-stone-600 border border-stone-200 hover:border-stone-300'
-                    }`}
-                  >
-                    <span>{a.emoji}</span> {a.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Camera / Upload */}
-            <div
-              className="card p-6 text-center cursor-pointer transition-all hover:border-emerald-300 hover:shadow-md"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <div className="text-4xl mb-2">📷</div>
-              <p className="font-semibold text-stone-700 mb-1">
-                Add {AREAS.find(a => a.value === selectedArea)?.emoji}{' '}
-                {AREAS.find(a => a.value === selectedArea)?.label} photo
-              </p>
-              <p className="text-xs text-stone-400">Tap to take or upload a photo</p>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                className="hidden"
-                onChange={e => handleFiles(e.target.files)}
-              />
-            </div>
-
-            {/* Photo gallery */}
-            {photos.length > 0 && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-semibold text-stone-800 text-sm">
-                    {photos.length} photo{photos.length > 1 ? 's' : ''} added
-                  </h3>
-                  {photos.length > 0 && (
-                    <span className="text-xs text-stone-400">
-                      {totalIngredients} ingredients found
-                    </span>
-                  )}
+        {/* ── Cookbook Tab ── */}
+        {tab === "cookbook" && (
+          <div>
+            {pantryItems.length > 0 && (
+              <div className="card p-4 mb-4 bg-amber-50 border-amber-200">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-semibold text-stone-800 text-sm flex items-center gap-1.5">🥗 My Pantry <span className="text-xs text-stone-400">({pantryItems.length})</span></h3>
+                  <button onClick={() => setPantryItems([])} className="text-xs text-stone-400 hover:text-red-500">Clear</button>
                 </div>
+                <div className="flex flex-wrap gap-1.5 mb-3">
+                  {pantryItems.slice(0, 24).map(i => <span key={i} className="text-xs px-2 py-1 rounded-full bg-white text-stone-600 border border-amber-200">{i}</span>)}
+                  {pantryItems.length > 24 && <span className="text-xs text-stone-400">+{pantryItems.length - 24} more</span>}
+                </div>
+                <button className="w-full py-2 rounded-xl bg-stone-800 text-white text-sm font-medium hover:bg-stone-900 transition-all" onClick={() => { setManualIngredients(prev => [...new Set([...prev, ...pantryItems])]); setTab("scan"); setPhotos([]); setView("upload") }}>🔍 Search with pantry</button>
+              </div>
+            )}
+            <div className="flex gap-2 mb-4">
+              <button onClick={() => setCookbookTab("saved")} className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${cookbookTab === "saved" ? "bg-stone-800 text-white" : "bg-white text-stone-500 border border-stone-200"}`}>📌 Saved ({savedRecipes.length})</button>
+              <button onClick={() => setCookbookTab("history")} className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${cookbookTab === "history" ? "bg-stone-800 text-white" : "bg-white text-stone-500 border border-stone-200"}`}>🍽 Cooked ({cookHistory.length})</button>
+            </div>
 
-                {photos.map(photo => (
-                  <div key={photo.id} className="card p-3">
+            {cookbookTab === "saved" && (
+              <div>{savedRecipes.length === 0 ? (
+                <div className="card p-8 text-center"><div className="text-4xl mb-3">📌</div><p className="text-stone-600 font-medium">No saved recipes yet</p><p className="text-stone-400 text-xs mt-1">Save recipes from search results to build your cookbook.</p></div>
+              ) : (
+                <div className="space-y-3">{savedRecipes.map(recipe => (
+                  <div key={recipe.id} className="card p-4">
                     <div className="flex gap-3">
-                      <img
-                        src={photo.dataUrl}
-                        alt={photo.area}
-                        className="w-16 h-16 rounded-xl object-cover flex-shrink-0"
-                      />
+                      {recipe.image && <img src={recipe.image} alt={recipe.title} className="w-16 h-16 rounded-xl object-cover flex-shrink-0" />}
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-sm font-medium text-stone-700">
-                            {AREAS.find(a => a.value === photo.area)?.emoji}{' '}
-                            {AREAS.find(a => a.value === photo.area)?.label}
-                          </span>
-                          <button
-                            onClick={() => removePhoto(photo.id)}
-                            className="text-stone-400 hover:text-red-500 text-xs px-2 py-0.5 rounded-lg hover:bg-red-50 transition-all"
-                          >
-                            ✕
-                          </button>
+                        <p className="font-semibold text-stone-900 text-sm leading-tight mb-1">{recipe.title}</p>
+                        <p className="text-xs text-emerald-600 font-medium mb-2">{recipe.matchPercent}% match</p>
+                        <div className="flex gap-1.5 flex-wrap">
+                          <button className="text-xs px-2.5 py-1.5 rounded-lg bg-emerald-100 text-emerald-700 font-medium hover:bg-emerald-200 transition-all" onClick={() => openRecipeDetail(recipe)}>View</button>
+                          <button className="text-xs px-2.5 py-1.5 rounded-lg bg-stone-100 text-stone-600 hover:bg-stone-200 transition-all" onClick={(e) => toggleSave(recipe, e)}>Unsave</button>
+                          <button className="text-xs px-2.5 py-1.5 rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-all" onClick={(e) => markCooked(recipe, e)}>🍽 Made it</button>
                         </div>
-
-                        {photo.analyzing && (
-                          <div className="flex items-center gap-1.5 text-xs text-stone-400">
-                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                            Identifying ingredients...
-                          </div>
-                        )}
-
-                        {photo.error && (
-                          <p className="text-xs text-red-500">{photo.error}</p>
-                        )}
-
-                        {!photo.analyzing && !photo.error && photo.ingredients.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {photo.ingredients.slice(0, 6).map(i => (
-                              <span key={i} className="text-xs px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">
-                                {i}
-                              </span>
-                            ))}
-                            {photo.ingredients.length > 6 && (
-                              <span className="text-xs text-stone-400">+{photo.ingredients.length - 6} more</span>
-                            )}
-                          </div>
-                        )}
-
-                        {!photo.analyzing && !photo.error && photo.ingredients.length === 0 && (
-                          <p className="text-xs text-stone-400">No ingredients found</p>
-                        )}
                       </div>
                     </div>
                   </div>
-                ))}
+                ))}</div>
+              )}</div>
+            )}
 
-                {/* Add more photos */}
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="w-full py-3 border-2 border-dashed border-stone-200 rounded-xl text-sm text-stone-500 hover:border-stone-300 hover:text-stone-600 transition-all flex items-center justify-center gap-2"
-                >
-                  <span>+</span> Add another photo
+            {cookbookTab === "history" && (
+              <div>{cookHistory.length === 0 ? (
+                <div className="card p-8 text-center"><div className="text-4xl mb-3">🍽</div><p className="text-stone-600 font-medium">Nothing cooked yet</p><p className="text-stone-400 text-xs mt-1">Mark recipes as &quot;Made it&quot; to track your cooking history.</p></div>
+              ) : (
+                <div className="space-y-3">{cookHistory.map((entry, idx) => (
+                  <div key={`${entry.id}-${entry.cookedAt}-${idx}`} className="card p-4">
+                    <div className="flex gap-3">
+                      {entry.image && <img src={entry.image} alt={entry.title} className="w-16 h-16 rounded-xl object-cover flex-shrink-0" />}
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-stone-900 text-sm leading-tight mb-1">{entry.title}</p>
+                        <p className="text-xs text-stone-400 mb-2">Cooked {new Date(entry.cookedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</p>
+                        <button className="text-xs px-2.5 py-1.5 rounded-lg bg-emerald-100 text-emerald-700 font-medium hover:bg-emerald-200 transition-all" onClick={() => openRecipeDetail(entry as unknown as Recipe)}>View recipe</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}</div>
+              )}</div>
+            )}
+          </div>
+        )}
+
+        {/* ── Upload View ── */}
+        {tab === "scan" && view !== "recipes" && view !== "analyzing" && (
+          <div className="space-y-4">
+
+            {pantryItems.length > 0 && (
+              <div className="card p-3 bg-amber-50 border-amber-200 flex items-center justify-between">
+                <span className="text-sm text-amber-800">🥗 Pantry has {pantryItems.length} items</span>
+                <button className="text-xs text-amber-700 hover:text-amber-900 font-medium" onClick={() => setManualIngredients(prev => [...new Set([...prev, ...pantryItems])])}>+ Add to scan</button>
+              </div>
+            )}
+
+            <div>
+              <p className="text-sm font-medium text-stone-600 mb-2">What are you photographing?</p>
+              <div className="flex gap-2 flex-wrap">{AREAS.map(a => (
+                <button key={a.value} onClick={() => setSelectedArea(a.value)} className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all ${selectedArea === a.value ? "bg-emerald-100 text-emerald-700 border border-emerald-300" : "bg-white text-stone-600 border border-stone-200 hover:border-stone-300"}`}>
+                  <span>{a.emoji}</span> {a.label}
                 </button>
+              ))}</div>
+            </div>
 
-                {/* Find recipes CTA */}
-                {hasResults && totalIngredients > 0 && (
-                  <button className="btn-primary py-4 text-base" onClick={findRecipes}>
-                    🍳 Find {recipes.length > 0 ? 'better ' : ''}Recipes ({totalIngredients} ingredients)
-                  </button>
-                )}
+            <div className="card p-6 text-center cursor-pointer transition-all hover:border-emerald-300 hover:shadow-md" onClick={() => fileInputRef.current?.click()}>
+              <div className="text-4xl mb-2">📷</div>
+              <p className="font-semibold text-stone-700 mb-1">Add {AREAS.find(a => a.value === selectedArea)?.emoji} {AREAS.find(a => a.value === selectedArea)?.label} photo</p>
+              <p className="text-xs text-stone-400">Tap to take or upload a photo</p>
+              <input ref={fileInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={e => handleFiles(e.target.files)} />
+            </div>
 
-                {hasResults && totalIngredients === 0 && (
-                  <div className="text-center py-3 text-sm text-stone-500">
-                    No ingredients detected. Try clearer photos.
+            <button className="w-full py-2.5 border-2 border-dashed border-stone-200 rounded-xl text-sm text-stone-500 hover:border-stone-300 hover:text-stone-600 transition-all flex items-center justify-center gap-2" onClick={() => setShowManualAdd(v => !v)}>
+              {showManualAdd ? "− Hide manual add" : "+ Add ingredients manually"}
+            </button>
+
+            {showManualAdd && (
+              <div className="card p-4 space-y-3">
+                <p className="text-xs text-stone-500">Type ingredients separated by commas, then press Add.</p>
+                <div className="flex gap-2">
+                  <input ref={manualInputRef} value={manualInput} onChange={e => setManualInput(e.target.value)} onKeyDown={e => e.key === "Enter" && manualInput.trim() && addManualIngredient()} placeholder="e.g. chicken breast, garlic, rice" className="flex-1 px-3 py-2 border border-stone-200 rounded-xl text-sm focus:outline-none focus:border-emerald-400" />
+                  <button className="btn-primary py-2 px-4 text-sm" onClick={addManualIngredient}>Add</button>
+                </div>
+                {manualIngredients.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {manualIngredients.map(i => (
+                      <span key={i} className="tag flex items-center gap-0.5 pr-1">{i}<button onClick={() => removeManualIngredient(i)} className="ml-0.5 text-stone-400 hover:text-red-500 text-xs leading-none">×</button></span>
+                    ))}
                   </div>
                 )}
               </div>
             )}
 
-            {photos.length === 0 && (
+            {photos.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold text-stone-800 text-sm">{photos.length} photo{photos.length > 1 ? "s" : ""} added</h3>
+                  <span className="text-xs text-stone-400">{totalIngredients} ingredients</span>
+                </div>
+
+                {photos.map(photo => (
+                  <div key={photo.id} className="card p-3">
+                    <div className="flex gap-3">
+                      <img src={photo.dataUrl} alt={photo.area} className="w-16 h-16 rounded-xl object-cover flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm font-medium text-stone-700">{AREAS.find(a => a.value === photo.area)?.emoji} {AREAS.find(a => a.value === photo.area)?.label}</span>
+                          <div className="flex items-center gap-1">
+                            <button onClick={() => startEditPhoto(photo)} className="text-stone-400 hover:text-emerald-600 text-xs px-2 py-0.5 rounded-lg hover:bg-emerald-50 transition-all" title="Edit ingredients">✎</button>
+                            <button onClick={() => removePhoto(photo.id)} className="text-stone-400 hover:text-red-500 text-xs px-2 py-0.5 rounded-lg hover:bg-red-50 transition-all">✕</button>
+                          </div>
+                        </div>
+                        {photo.analyzing && <div className="flex items-center gap-1.5 text-xs text-stone-400"><div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />Identifying...</div>}
+                        {photo.error && <p className="text-xs text-red-500">{photo.error}</p>}
+                        {!photo.analyzing && !photo.error && editingPhotoId === photo.id && (
+                          <div className="space-y-1.5">
+                            <textarea value={editText} onChange={e => setEditText(e.target.value)} className="w-full px-2 py-1.5 border border-emerald-300 rounded-lg text-xs resize-none focus:outline-none focus:border-emerald-500" rows={2} placeholder="Comma-separated: chicken, garlic, ..." />
+                            <div className="flex gap-2">
+                              <button className="text-xs px-2 py-1 rounded-lg bg-emerald-100 text-emerald-700 font-medium" onClick={() => saveEditPhoto(photo.id)}>Save</button>
+                              <button className="text-xs px-2 py-1 rounded-lg bg-stone-100 text-stone-500" onClick={() => setEditingPhotoId(null)}>Cancel</button>
+                            </div>
+                          </div>
+                        )}
+                        {!photo.analyzing && !photo.error && editingPhotoId !== photo.id && photo.ingredients.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {photo.ingredients.slice(0, 8).map(i => <span key={i} className="text-xs px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">{i}</span>)}
+                            {photo.ingredients.length > 8 && <span className="text-xs text-stone-400">+{photo.ingredients.length - 8} more</span>}
+                          </div>
+                        )}
+                        {!photo.analyzing && !photo.error && photo.ingredients.length === 0 && <p className="text-xs text-stone-400">No items detected — tap ✎ to add manually</p>}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {manualIngredients.length > 0 && (
+                  <div className="card p-3 bg-amber-50 border border-amber-100">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs font-medium text-amber-700">Manually added</span>
+                      <span className="text-xs text-amber-500">{manualIngredients.length} items</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1">{manualIngredients.map(i => <span key={i} className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800">{i}</span>)}</div>
+                  </div>
+                )}
+
+                <button onClick={() => fileInputRef.current?.click()} className="w-full py-3 border-2 border-dashed border-stone-200 rounded-xl text-sm text-stone-500 hover:border-stone-300 hover:text-stone-600 transition-all flex items-center justify-center gap-2"><span>+</span> Add another photo</button>
+
+                {hasResults && totalIngredients > 0 && <button className="btn-primary py-4 text-base w-full" onClick={() => findRecipes()}>🍳 Find Recipes ({totalIngredients} ingredients)</button>}
+                {hasResults && totalIngredients === 0 && <div className="text-center py-3 text-sm text-stone-500">No ingredients detected. Add items manually or retake photos.</div>}
+              </div>
+            )}
+
+            {photos.length === 0 && manualIngredients.length === 0 && (
               <div className="card p-4">
                 <h3 className="font-semibold text-stone-800 mb-2 text-sm">How it works</h3>
                 <ol className="space-y-2 text-xs text-stone-500">
                   <li className="flex gap-2"><span className="text-emerald-600 font-bold">1.</span> Choose an area — fridge, freezer, pantry, or grocery haul</li>
                   <li className="flex gap-2"><span className="text-emerald-600 font-bold">2.</span> Take photos of what you have</li>
-                  <li className="flex gap-2"><span className="text-emerald-600 font-bold">3.</span> Add as many areas as you want</li>
+                  <li className="flex gap-2"><span className="text-emerald-600 font-bold">3.</span> Add items manually or correct AI mistakes</li>
                   <li className="flex gap-2"><span className="text-emerald-600 font-bold">4.</span> Get recipes matched to everything combined</li>
+                  <li className="flex gap-2"><span className="text-emerald-600 font-bold">5.</span> Save favorites to your Cookbook</li>
                 </ol>
               </div>
             )}
@@ -332,110 +416,100 @@ export default function App() {
         )}
 
         {/* ── Analyzing View ── */}
-        {view === 'analyzing' && (
+        {view === "analyzing" && (
           <div className="text-center py-16">
-            <div className="grid grid-cols-3 gap-2 mb-6 max-w-xs mx-auto">
-              {photos.slice(0, 3).map(p => (
-                <div key={p.id} className="rounded-xl overflow-hidden">
-                  <img src={p.dataUrl} alt={p.area} className="w-full aspect-square object-cover" />
-                </div>
-              ))}
-            </div>
+            <div className="grid grid-cols-3 gap-2 mb-6 max-w-xs mx-auto">{photos.slice(0, 3).map(p => <div key={p.id} className="rounded-xl overflow-hidden"><img src={p.dataUrl} alt={p.area} className="w-full aspect-square object-cover" /></div>)}</div>
             <div className="text-5xl mb-4 animate-bounce">🔍</div>
             <h2 className="text-xl font-bold text-stone-900 mb-2">Finding recipes...</h2>
-            <p className="text-stone-400 text-sm">
-              {analyzingCount > 0 ? `Analyzing ${analyzingCount} photo${analyzingCount > 1 ? 's' : ''}...` : 'Matching ingredients to recipes'}
-            </p>
-            <div className="flex items-center justify-center gap-1 mt-4">
-              {[0, 1, 2].map(i => (
-                <div key={i} className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"
-                  style={{ animationDelay: `${i * 200}ms`, opacity: 0.4 + i * 0.2 }} />
-              ))}
-            </div>
+            <p className="text-stone-400 text-sm">Matching your ingredients</p>
+            <div className="flex items-center justify-center gap-1 mt-4">{[0, 1, 2].map(i => <div key={i} className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" style={{ animationDelay: `${i * 200}ms`, opacity: 0.4 + i * 0.2 }} />)}</div>
           </div>
         )}
 
         {/* ── Recipes View ── */}
-        {view === 'recipes' && (
+        {view === "recipes" && (
           <div>
-            <button className="btn-secondary mb-4 text-sm" onClick={reset}>
-              ← New search
-            </button>
-
-            <div className="mb-4">
-              <h2 className="text-xl font-bold text-stone-900 mb-1">Your combined inventory</h2>
-              <p className="text-xs text-stone-400 mb-2">
-                {photos.length} areas · {allIngredients.length} ingredients
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {allIngredients.map(i => (
-                  <span key={i} className="tag">{i}</span>
-                ))}
+            <div className="flex items-center justify-between mb-4">
+              <button className="btn-secondary text-sm" onClick={reset}>← New search</button>
+              <div className="flex items-center gap-2">
+                {hasActiveFilters && <button className="text-xs text-stone-400 hover:text-red-500" onClick={clearFilters}>Clear</button>}
+                <button onClick={() => setShowFilters(v => !v)} className={`px-3 py-1.5 rounded-xl text-sm font-medium border transition-all ${showFilters ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-600 border-stone-200 hover:border-stone-300"}`}>⚙ Filters {hasActiveFilters ? "•" : ""}</button>
               </div>
             </div>
 
-            <div className="h-px bg-stone-200 my-5" />
+            {showFilters && (
+              <div className="card p-4 mb-4 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-stone-500 mb-1 block">Cuisine</label>
+                    <select value={filters.cuisine} onChange={e => setFilters(f => ({ ...f, cuisine: e.target.value }))} className="w-full px-2 py-2 border border-stone-200 rounded-xl text-sm focus:outline-none focus:border-emerald-400">
+                      {CUISINES.map(c => <option key={c} value={c === "Any" ? "" : c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-stone-500 mb-1 block">Diet</label>
+                    <select value={filters.diet} onChange={e => setFilters(f => ({ ...f, diet: e.target.value }))} className="w-full px-2 py-2 border border-stone-200 rounded-xl text-sm focus:outline-none focus:border-emerald-400">
+                      {DIETS.map(d => <option key={d} value={d === "Any" ? "" : d.toLowerCase().replace(/ /g, "")}>{d}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-stone-500 mb-1 block">Max cook time</label>
+                  <div className="flex gap-2">{MAX_TIMES.map(t => (
+                    <button key={t.label} onClick={() => setFilters(f => ({ ...f, maxReadyTime: t.value }))} className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all ${filters.maxReadyTime === t.value ? "bg-emerald-100 text-emerald-700 border border-emerald-300" : "bg-stone-50 text-stone-500 border border-stone-200"}`}>{t.label}</button>
+                  ))}</div>
+                </div>
+                <button onClick={() => findRecipes(filters)} className="btn-primary w-full py-2.5 text-sm">Apply Filters</button>
+              </div>
+            )}
 
-            <h3 className="font-bold text-stone-800 mb-3">
-              {recipes.length} recipes you can make
-            </h3>
+            <div className="mb-4">
+              <h2 className="text-xl font-bold text-stone-900 mb-1">Your combined inventory</h2>
+              <p className="text-xs text-stone-400 mb-2">{photos.length} areas · {allIngredients.length} ingredients</p>
+              <div className="flex flex-wrap gap-1.5 mb-3">{allIngredients.map(i => <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-stone-200 text-stone-600">{i}</span>)}</div>
+              {allIngredients.length > 0 && (
+                <button onClick={() => { setPantryItems(prev => [...new Set([...prev, ...allIngredients])]) }} className="text-xs text-emerald-600 hover:text-emerald-700 font-medium">+ Save all to pantry</button>
+              )}
+            </div>
+
+            <div className="h-px bg-stone-200 my-5" />
+            <h3 className="font-bold text-stone-800 mb-3">{recipes.length} recipes you can make</h3>
 
             {recipes.length === 0 ? (
-              <div className="card p-8 text-center">
-                <div className="text-4xl mb-3">🤷</div>
-                <p className="text-stone-600 font-medium">No exact matches found.</p>
-                <p className="text-stone-400 text-xs mt-1">Try adding more ingredients from other areas.</p>
-              </div>
+              <div className="card p-8 text-center"><div className="text-4xl mb-3">🤷</div><p className="text-stone-600 font-medium">No exact matches found.</p><p className="text-stone-400 text-xs mt-1">Try loosening filters or adding more ingredients.</p></div>
             ) : (
-              <div className="space-y-3">
-                {recipes.map(recipe => (
-                  <button
-                    key={recipe.id}
-                    className="card p-4 w-full text-left hover:shadow-md transition-all hover:-translate-y-0.5 cursor-pointer"
-                    onClick={() => openRecipeDetail(recipe)}
-                  >
-                    <div className="flex gap-4">
-                      {recipe.image && (
-                        <img
-                          src={recipe.image}
-                          alt={recipe.title}
-                          className="w-20 h-20 rounded-xl object-cover flex-shrink-0"
-                        />
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-stone-900 text-sm leading-tight mb-1">{recipe.title}</p>
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="text-xs font-medium text-emerald-600">
-                            {recipe.matchPercent}% match
-                          </span>
-                          <span className="text-xs text-stone-400">
-                            {recipe.usedCount} have · {recipe.missedCount} missing
-                          </span>
-                        </div>
-                        {recipe.missedCount > 0 && (
-                          <p className="text-xs text-stone-400">
-                            Missing: {recipe.missedIngredients.slice(0, 2).join(', ')}
-                            {recipe.missedCount > 2 && ` +${recipe.missedCount - 2} more`}
-                          </p>
-                        )}
+              <div className="space-y-3">{recipes.map(recipe => (
+                <div key={recipe.id} className="card p-4">
+                  <div className="flex gap-3">
+                    {recipe.image && <img src={recipe.image} alt={recipe.title} className="w-20 h-20 rounded-xl object-cover flex-shrink-0" />}
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-stone-900 text-sm leading-tight mb-1">{recipe.title}</p>
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-xs font-medium text-emerald-600">{recipe.matchPercent}% match</span>
+                        <span className="text-xs text-stone-400">{recipe.usedCount} have · {recipe.missedCount} missing</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button className="text-xs px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-700 font-medium hover:bg-emerald-200 transition-all" onClick={() => openRecipeDetail(recipe)}>View</button>
+                        <button className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-all ${isSaved(recipe.id) ? "bg-amber-200 text-amber-800" : "bg-stone-100 text-stone-600 hover:bg-stone-200"}`} onClick={(e) => toggleSave(recipe, e)}>
+                          {isSaved(recipe.id) ? "★ Saved" : "☆ Save"}
+                        </button>
+                        <button className="text-xs px-2.5 py-1 rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-all" onClick={(e) => markCooked(recipe, e)}>🍽 Made it</button>
                       </div>
                     </div>
-                  </button>
-                ))}
-              </div>
+                  </div>
+                </div>
+              ))}</div>
             )}
           </div>
         )}
 
         {/* ── Error View ── */}
-        {view === 'error' && (
+        {view === "error" && (
           <div className="text-center py-12">
             <div className="text-5xl mb-4">😅</div>
-            <h2 className="text-xl font-bold text-stone-900 mb-2">Couldn't analyze that</h2>
+            <h2 className="text-xl font-bold text-stone-900 mb-2">Couldn&apos;t analyze that</h2>
             <p className="text-stone-500 text-sm mb-6">{error}</p>
-            <button className="btn-primary max-w-xs mx-auto" onClick={reset}>
-              Try again
-            </button>
+            <button className="btn-primary max-w-xs mx-auto" onClick={reset}>Try again</button>
           </div>
         )}
       </main>
@@ -451,11 +525,7 @@ export default function App() {
               <div className="flex-1 min-w-0">
                 <h3 className="font-bold text-stone-900 leading-tight">{selectedRecipe.title}</h3>
                 {selectedRecipe.image && (
-                  <img
-                    src={selectedRecipe.image}
-                    alt={selectedRecipe.title}
-                    className="w-full h-48 object-cover rounded-xl mt-3"
-                  />
+                  <img src={selectedRecipe.image} alt={selectedRecipe.title} className="w-full h-48 object-cover rounded-xl mt-3" />
                 )}
               </div>
               <button
@@ -483,9 +553,7 @@ export default function App() {
                   <p className="text-xs font-semibold text-stone-500 uppercase tracking-wide mb-2">You need</p>
                   <div className="flex flex-wrap gap-1.5">
                     {selectedRecipe.missedIngredients.map((ing, i) => (
-                      <span key={i} className="text-xs px-2.5 py-1 rounded-full bg-stone-100 text-stone-600">
-                        {ing}
-                      </span>
+                      <span key={i} className="text-xs px-2.5 py-1 rounded-full bg-stone-100 text-stone-600">{ing}</span>
                     ))}
                   </div>
                 </div>
@@ -507,15 +575,12 @@ export default function App() {
               ) : recipeDetail?.summary ? (
                 <div className="space-y-4">
                   <div className="flex items-center gap-4 text-sm text-stone-500">
-                    {recipeDetail.info?.readyInMinutes && (
-                      <span>⏱ {recipeDetail.info.readyInMinutes} min</span>
-                    )}
-                    {recipeDetail.info?.servings && (
-                      <span>🍽 {recipeDetail.info.servings} servings</span>
-                    )}
+                    {recipeDetail.info?.readyInMinutes && <span>⏱ {recipeDetail.info.readyInMinutes} min</span>}
+                    {recipeDetail.info?.servings && <span>🍽 {recipeDetail.info.servings} servings</span>}
                   </div>
-                  <p className="text-sm text-stone-600 leading-relaxed"
-                    dangerouslySetInnerHTML={{ __html: recipeDetail.summary?.replace(/<[^>]+>/g, '') || '' }}
+                  <p
+                    className="text-sm text-stone-600 leading-relaxed"
+                    dangerouslySetInnerHTML={{ __html: (recipeDetail.summary || "").replace(/<[^>]+>/g, "") }}
                   />
                   {recipeDetail.info?.sourceUrl && (
                     <a
@@ -531,6 +596,21 @@ export default function App() {
               ) : (
                 <p className="text-stone-400 text-sm">Recipe details unavailable.</p>
               )}
+            </div>
+
+            <div className="px-4 pb-4 flex gap-2">
+              <button
+                className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ${isSaved(selectedRecipe.id) ? "bg-amber-200 text-amber-800" : "bg-stone-100 text-stone-600 hover:bg-stone-200"}`}
+                onClick={(e) => toggleSave(selectedRecipe, e)}
+              >
+                {isSaved(selectedRecipe.id) ? "★ Saved" : "☆ Save"}
+              </button>
+              <button
+                className="flex-1 py-2.5 rounded-xl bg-amber-100 text-amber-700 text-sm font-semibold hover:bg-amber-200 transition-all"
+                onClick={(e) => markCooked(selectedRecipe, e)}
+              >
+                🍽 Made it
+              </button>
             </div>
           </div>
         </div>
