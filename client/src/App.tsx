@@ -135,9 +135,12 @@ export default function App() {
   const analyzePhoto = async (id: string, dataUrl: string) => {
     try {
       const res = await fetch(`${API}/analyze`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageUrl: dataUrl }) })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || `Server error ${res.status}`)
+      }
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || "Analysis failed")
-      setPhotos(prev => prev.map(p => p.id === id ? { ...p, ingredients: data.ingredients || [], analyzing: false } : p))
+      setPhotos(prev => prev.map(p => p.id === id ? { ...p, ingredients: data.ingredients || [], analyzing: false, error: data.error } : p))
     } catch (err: any) { setPhotos(prev => prev.map(p => p.id === id ? { ...p, analyzing: false, error: err.message } : p)) }
   }
 

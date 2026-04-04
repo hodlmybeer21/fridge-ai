@@ -1,5 +1,4 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import axios from 'axios'
 
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY || ''
 
@@ -15,19 +14,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     let imageData = imageUrl
 
+    // Proxy external URLs through Vercel serverless to avoid CORS / fetch limits
     if (!imageUrl.startsWith('data:')) {
       try {
-        const imgResponse = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 10000 })
-        const mimeType = imgResponse.headers['content-type'] || 'image/jpeg'
-        imageData = `data:${mimeType};base64,${Buffer.from(imgResponse.data).toString('base64')}`
+        const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(10000) })
+        if (!imgRes.ok) throw new Error(`Image fetch failed: ${imgRes.status}`)
+        const buf = await imgRes.arrayBuffer()
+        const mimeType = imgRes.headers.get('content-type') || 'image/jpeg'
+        imageData = `data:${mimeType};base64,${Buffer.from(buf).toString('base64')}`
       } catch (proxyErr: any) {
         console.warn('Image proxy failed:', proxyErr.message)
       }
     }
 
-    const response = await axios.post(
-      'https://openrouter.ai/api/v1/chat/completions',
-      {
+    // Check size — refuse images that would make the request too large for OpenRouter
+    if (imageData.length > 1_500_000) {
+      return res.status(413).json({ error: 'Image too large. Please use a smaller photo.' })
+    }
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${OPENROUTER_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://fridge.goodbotai.tech',
+        'X-Title': 'FridgeAI',
+      },
+      body: JSON.stringify({
         model: 'openai/gpt-4o-mini',
         messages: [
           {
@@ -36,39 +49,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               { type: 'image_url', image_url: { url: imageData } },
               {
                 type: 'text',
-                text: `You are a fridge inventory assistant. Look at this image and list ALL visible food items as a clean JSON array of ingredient names. Return ONLY a valid JSON array of strings, nothing else. Example: ["eggs","whole milk","cheddar cheese","broccoli","chicken breast"]. Be specific (e.g. "chicken breast" not "chicken", "cheddar cheese" not "cheese"). Include condiments and sauces you can identify.`
+                text: `You are a fridge inventory assistant. Look at this image and list ALL visible food items as a clean JSON array of ingredient names. Return ONLY a valid JSON array of strings, nothing else. Example: ["eggs","whole milk","cheddar cheese","broccoli","chicken breast"]. Be specific. Include condiments and sauces you can identify.`
               }
             ]
           }
         ],
         max_tokens: 400
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${OPENROUTER_KEY}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://fridge.goodbotai.tech',
-          'X-Title': 'FridgeAI'
-        },
-        timeout: 25000
-      }
-    )
+      }),
+      signal: AbortSignal.timeout(30000)
+    })
 
-    const text = response.data.choices?.[0]?.message?.content || ''
-    const match = text.match(/\[[\s\S]*?\]/s)
-    if (!match) return res.status(200).json({ ingredients: [], raw: text })
-    let ingredients
-    try {
-      ingredients = JSON.parse(match[0])
-    } catch {
-      return res.status(200).json({ ingredients: [], raw: text, parseError: true })
+    if (!response.ok) {
+      const detail = await response.text().catch(() => response.statusText)
+      return res.status(502).json({ error: 'OpenRouter request failed', detail: String(detail).slice(0, 200) })
     }
-    if (!Array.isArray(ingredients)) return res.status(200).json({ ingredients: [], raw: text })
-    ingredients = ingredients.filter((i: any) => typeof i === 'string')
-    res.json({ ingredients })
+
+    const data = await response.json()
+    const text = data.choices?.[0]?.message?.content || ''
+    const match = text.match(/\[[\s\S]*?\]/s)
+
+    if (!match) {
+      return res.status(200).json({ ingredients: [], raw: text.slice(0, 500) })
+    }
+
+    try {
+      const ingredients = JSON.parse(match[0])
+      if (!Array.isArray(ingredients)) return res.status(200).json({ ingredients: [], raw: text.slice(0, 500) })
+      return res.json({ ingredients: ingredients.filter((i: any) => typeof i === 'string') })
+    } catch {
+      return res.status(200).json({ ingredients: [], raw: text.slice(0, 500), parseError: true })
+    }
+
   } catch (err: any) {
-    console.error('Vision error:', err.response?.data || err.message)
-    const detail = err.response?.data?.error?.message || err.message || 'Unknown error'
+    console.error('Vision error:', err.message)
+    const detail = err.message || 'Unknown error'
     res.status(500).json({ error: 'Vision analysis failed', detail: String(detail).slice(0, 200) })
   }
 }
