@@ -3,6 +3,7 @@ import { useState, useRef, useEffect } from 'react'
 // API base: relative /api routes work in both dev (Vite proxy) and prod (Vercel serverless functions)
 const API = ''
 
+type Recipe = {
   id: number
   title: string
   image: string
