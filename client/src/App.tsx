@@ -14,6 +14,7 @@ type Recipe = {
   matchPercent: number
   readyInMinutes?: number
   servings?: number
+  extendedIngredients?: { original: string }[]
 }
 
 type Area = 'fridge' | 'freezer' | 'pantry' | 'grocery'
@@ -193,16 +194,80 @@ export default function App() {
 
   const isSaved = (id: number) => savedRecipes.some(r => r.id === id)
 
-  const toggleSave = (recipe: Recipe, e?: React.MouseEvent) => {
-    e?.stopPropagation()
-    if (isSaved(recipe.id)) { setSavedRecipes(prev => prev.filter(r => r.id !== recipe.id)) }
-    else { setSavedRecipes(prev => prev.some(r => r.id === recipe.id) ? prev : [...prev, recipe]) }
+  // ── Cooking mode ──
+  const [cookingRecipe, setCookingRecipe] = useState<Recipe | null>(null)
+  const [cookingStep, setCookingStep] = useState(0)
+  const [servingScale, setServingScale] = useState(1)
+  const [sheetHydrated, setSheetHydrated] = useState(false)
+  const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1UYWrCptoka69icyReGT7IFSFUaAv23HA6DtqKm_73jQ/export?format=csv&gid=0"
+
+  const parseIngredients = (ings: { original: string }[] | string[], missed: string[]) => {
+    if (Array.isArray(ings) && typeof ings[0] === 'object') {
+      return (ings as { original: string }[]).map(ing => {
+        const raw = ing.original.replace(/½/g, '0.5').replace(/¼/g, '0.25').replace(/¾/g, '0.75')
+        const match = raw.match(/^([\d.,\/]+)?\s*([a-zA-Zµµ®°⁰¹²³⁴⁵⁶⁷⁸⁹°]+)?\s+(.+)$/)
+        return { qty: match ? parseFloat(match[1]?.replace('/', '.') || '1') : 1, unit: match?.[2] || '', name: match?.[3] || ing.original }
+      })
+    }
+    return (missed as string[]).map(i => ({ qty: 1, unit: '', name: i }))
+  }
+
+  const scaleQty = (qty: number) => {
+    const scaled = qty * servingScale
+    return Number.isInteger(scaled) ? String(scaled) : scaled.toFixed(1).replace(/\.0$/, '')
+  }
+
+  const getInstructions = (recipe: Recipe) => {
+    if (!recipeDetail?.info?.instructions) return []
+    const text = recipeDetail.info.instructions
+    // Parse numbered steps
+    const steps = text.split(/\n\d+\.\s*/).filter(Boolean).map(s => s.replace(/<[^>]+>/g, '').trim()).filter(s => s.length > 10)
+    if (steps.length > 0) return steps
+    // Fallback: split by newlines
+    return text.split('\n').map(s => s.replace(/<[^>]+>/g, '').trim()).filter(s => s.length > 10)
+  }
+
+  const startCooking = (recipe: Recipe) => {
+    const ings = parseIngredients(recipeDetail?.info?.extendedIngredients || [], recipe.missedIngredients)
+    setPantryItems(prev => {
+      const used = new Set(ings.map(i => i.name.toLowerCase()))
+      return prev.map(p => used.has(p.name.toLowerCase()) ? { ...p, quantity: String(Math.max(1, (parseInt(p.quantity) || 1) - 1)) } : p)
+    })
+    setCookingRecipe(recipe); setCookingStep(0); setServingScale(1)
+  }
+
+  const speakStep = (text: string) => {
+    if ('speechSynthesis' in window) { window.speechSynthesis.cancel(); window.speechSynthesis.speak(new SpeechSynthesisUtterance(text)) }
   }
 
   const markCooked = (recipe: Recipe, e?: React.MouseEvent) => {
     e?.stopPropagation()
+    // Deduct used ingredients from pantry
+    const used = new Set(recipe.missedIngredients.map(i => i.toLowerCase()))
+    setPantryItems(prev => prev.filter(p => !used.has(p.name.toLowerCase())))
     const entry: CookHistoryEntry = { id: recipe.id, title: recipe.title, image: recipe.image, cookedAt: new Date().toISOString(), matchPercent: recipe.matchPercent }
     setCookHistory(prev => [entry, ...prev.filter(h => h.id !== recipe.id)])
+  }
+
+  // Hydrate pantry from Google Sheets on mount
+  useEffect(() => {
+    fetch(SHEET_CSV_URL).then(r => r.text()).then(csv => {
+      const lines = csv.trim().split('\n')
+      if (lines.length < 2) return
+      const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''))
+      const rows = lines.slice(1).map(line => {
+        const vals = line.split(',').map(v => v.trim().replace(/"/g, ''))
+        return { name: vals[0] || '', addedAt: vals[1] || new Date().toISOString(), expiry: vals[2] || '', quantity: vals[3] || '1' }
+      }).filter(r => r.name)
+      if (rows.length > 0) setPantryItems(rows)
+      setSheetHydrated(true)
+    }).catch(() => setSheetHydrated(true))
+  }, [])
+
+  const toggleSave = (recipe: Recipe, e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    if (isSaved(recipe.id)) { setSavedRecipes(prev => prev.filter(r => r.id !== recipe.id)) }
+    else { setSavedRecipes(prev => prev.some(r => r.id === recipe.id) ? prev : [...prev, recipe]) }
   }
 
   const openRecipeDetail = async (recipe: Recipe) => {
@@ -316,8 +381,14 @@ export default function App() {
             {pantryItems.length > 0 && (
               <div className="card p-4 mb-4 bg-amber-50 border-amber-200">
                 <div className="flex items-center justify-between mb-2">
-                  <h3 className="font-semibold text-stone-800 text-sm flex items-center gap-1.5">🥗 My Pantry <span className="text-xs text-stone-400">({pantryItems.length})</span></h3>
-                  <button onClick={() => setPantryItems([])} className="text-xs text-stone-400 hover:text-red-500">Clear</button>
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="font-semibold text-stone-800 text-sm flex items-center gap-1.5">🥗 My Pantry <span className="text-xs text-stone-400">({pantryItems.length})</span></h3>
+                    {sheetHydrated && <span className="text-xs text-emerald-500">✓ synced</span>}
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => { fetch(SHEET_CSV_URL).then(r => r.text()).then(csv => { const lines = csv.trim().split('\n'); if (lines.length < 2) return; const rows = lines.slice(1).map(l => { const v = l.split(',').map(x => x.trim().replace(/"/g, '')); return { name: v[0]||'', addedAt: v[1]||new Date().toISOString(), expiry: v[2]||'', quantity: v[3]||'1' } }).filter(r => r.name); if (rows.length > 0) setPantryItems(rows) }).catch(() => {}) }} className="text-xs text-stone-400 hover:text-emerald-500">🔄</button>
+                    <button onClick={() => setPantryItems([])} className="text-xs text-stone-400 hover:text-red-500">Clear</button>
+                  </div>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mb-3">
                   {pantryItems.slice(0, 24).map(p => <span key={p.name} onClick={() => openExpiryEditor(p.name)} className={`text-xs px-2 py-1 rounded-full border cursor-pointer transition-all ${expiredItems().some(e => e.name === p.name) ? "bg-red-100 text-red-800 border-red-200 line-through" : expiringItems().some(e => e.name === p.name) ? "bg-orange-100 text-orange-800 border-orange-200" : "bg-white text-stone-600 border-amber-200 hover:border-amber-400"}`}>{p.name}{p.expiry ? ` (${daysUntil(p.expiry) >= 0 ? daysUntil(p.expiry) + "d" : "exp"})` : ""}</span>)}
@@ -783,14 +854,34 @@ export default function App() {
                 <p className="text-stone-500 text-sm">{recipeDetail.error}</p>
               ) : recipeDetail?.summary ? (
                 <div className="space-y-4">
+                  <div className="flex items-center justify-between">
                   <div className="flex items-center gap-4 text-sm text-stone-500">
                     {recipeDetail.info?.readyInMinutes && <span>⏱ {recipeDetail.info.readyInMinutes} min</span>}
                     {recipeDetail.info?.servings && <span>🍽 {recipeDetail.info.servings} servings</span>}
                   </div>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => setServingScale(s => Math.max(0.5, s - 0.5))} className="w-7 h-7 rounded-lg bg-stone-100 text-stone-600 text-sm font-bold hover:bg-stone-200">−</button>
+                    <span className="text-xs font-medium w-16 text-center">{servingScale}x</span>
+                    <button onClick={() => setServingScale(s => s + 0.5)} className="w-7 h-7 rounded-lg bg-stone-100 text-stone-600 text-sm font-bold hover:bg-stone-200">+</button>
+                  </div>
+                </div>
                   <p
                     className="text-sm text-stone-600 leading-relaxed"
                     dangerouslySetInnerHTML={{ __html: (recipeDetail.summary || "").replace(/<[^>]+>/g, "") }}
                   />
+                  {getInstructions(selectedRecipe).length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-stone-500 uppercase tracking-wide mb-2 mt-3">Instructions</p>
+                      <ol className="space-y-2">
+                        {getInstructions(selectedRecipe).slice(0, 6).map((step, i) => (
+                          <li key={i} className="flex gap-2 text-sm text-stone-600">
+                            <span className="flex-shrink-0 w-5 h-5 rounded-full bg-amber-100 text-amber-700 text-xs font-bold flex items-center justify-center mt-0.5">{i + 1}</span>
+                            <span>{step}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
                   {recipeDetail.info?.sourceUrl && (
                     <a
                       href={recipeDetail.info.sourceUrl}
@@ -820,11 +911,70 @@ export default function App() {
               >
                 🍽 Made it
               </button>
+              {getInstructions(selectedRecipe).length > 0 && (
+                <button
+                  className="flex-1 py-2.5 rounded-xl bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 transition-all"
+                  onClick={() => startCooking(selectedRecipe)}
+                >
+                  👨‍🍳 Cook Mode
+                </button>
+              )}
             </div>
           </div>
         </div>
       )}
  
+      {cookingRecipe && (() => {
+        const steps = getInstructions(cookingRecipe)
+        const currentStep = steps[cookingStep] || ''
+        const total = steps.length
+        return (
+          <div className="fixed inset-0 bg-stone-900 z-50 flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 bg-stone-800">
+              <button onClick={() => { setCookingRecipe(null); window.speechSynthesis?.cancel() }} className="text-stone-400 hover:text-white text-sm">✕ Close</button>
+              <p className="text-stone-400 text-xs">{cookingStep + 1} / {total}</p>
+              <button onClick={() => speakStep(currentStep)} className="text-stone-400 hover:text-white text-sm">🔊 Hear</button>
+            </div>
+            {/* Progress */}
+            <div className="h-1 bg-stone-700">
+              <div className="h-full bg-emerald-500 transition-all" style={{ width: `${total > 0 ? ((cookingStep + 1) / total) * 100 : 0}%` }} />
+            </div>
+            {/* Step content */}
+            <div className="flex-1 flex flex-col items-center justify-center p-8">
+              <div className="text-6xl mb-6">{cookingStep === 0 ? '🍳' : cookingStep === total - 1 ? '🍽️' : '🔥'}</div>
+              <p className="text-2xl font-bold text-white text-center leading-relaxed mb-8">{currentStep}</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => { setCookingStep(s => Math.max(0, s - 1)); window.speechSynthesis?.cancel() }}
+                  disabled={cookingStep === 0}
+                  className="px-6 py-3 rounded-xl bg-stone-700 text-white font-medium disabled:opacity-30 hover:bg-stone-600 transition-all"
+                >← Back</button>
+                {cookingStep < total - 1 ? (
+                  <button
+                    onClick={() => { setCookingStep(s => s + 1); window.speechSynthesis?.cancel() }}
+                    className="px-6 py-3 rounded-xl bg-emerald-500 text-white font-semibold hover:bg-emerald-600 transition-all"
+                  >Next →</button>
+                ) : (
+                  <button
+                    onClick={() => { markCooked(cookingRecipe, undefined as any); setCookingRecipe(null); window.speechSynthesis?.cancel() }}
+                    className="px-6 py-3 rounded-xl bg-amber-500 text-white font-semibold hover:bg-amber-600 transition-all"
+                  >🍽️ Done!</button>
+                )}
+              </div>
+            </div>
+            {/* Step dots */}
+            <div className="flex justify-center gap-2 pb-8">
+              {steps.map((_, i) => (
+                <button key={i} onClick={() => { setCookingStep(i); window.speechSynthesis?.cancel() }}
+                  className={`w-2.5 h-2.5 rounded-full transition-all ${i === cookingStep ? 'bg-emerald-400' : i < cookingStep ? 'bg-emerald-700' : 'bg-stone-600'}`}
+                />
+              ))}
+            </div>
+          </div>
+        )
+      })()}
+
       {showExpiryEditor && (
         <div
           className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
