@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 
-type Recipe = {
+// Use VPS API in production (Vercel static hosting has no server)
+// In dev, Vite proxies /api to localhost:3001
+const API = (import.meta.env.VITE_API_BASE as string) || '/api'
+
   id: number
   title: string
   image: string
@@ -121,7 +124,7 @@ export default function App() {
 
   const analyzePhoto = async (id: string, dataUrl: string) => {
     try {
-      const res = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageUrl: dataUrl }) })
+      const res = await fetch(`${API}/analyze`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageUrl: dataUrl }) })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Analysis failed")
       setPhotos(prev => prev.map(p => p.id === id ? { ...p, ingredients: data.ingredients || [], analyzing: false } : p))
@@ -159,7 +162,7 @@ export default function App() {
     setAllIngredients(unique); setView("analyzing"); setShowFilters(false)
     const activeFilters = { ...filters, ...overrides }
     try {
-      const res = await fetch("/api/recipes", {
+      const res = await fetch(`${API}/recipes`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ingredients: unique,
@@ -195,7 +198,7 @@ export default function App() {
 
   const openRecipeDetail = async (recipe: Recipe) => {
     setSelectedRecipe(recipe); setRecipeDetail(null); setLoadingDetail(true)
-    try { const res = await fetch(`/api/recipes/${recipe.id}`); const data = await res.json(); setRecipeDetail(data) }
+    try { const res = await fetch(`${API}/recipes/${recipe.id}`); const data = await res.json(); setRecipeDetail(data) }
     catch { setRecipeDetail({ error: "Could not load recipe details" }) }
     finally { setLoadingDetail(false) }
   }
