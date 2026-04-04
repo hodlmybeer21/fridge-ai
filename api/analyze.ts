@@ -49,19 +49,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           'Content-Type': 'application/json',
           'HTTP-Referer': 'https://fridge.goodbotai.tech',
           'X-Title': 'FridgeAI'
-        }
+        },
+        timeout: 25000
       }
     )
 
     const text = response.data.choices?.[0]?.message?.content || ''
     const match = text.match(/\[[\s\S]*?\]/s)
     if (!match) return res.status(200).json({ ingredients: [], raw: text })
-    let ingredients = JSON.parse(match[0])
+    let ingredients
+    try {
+      ingredients = JSON.parse(match[0])
+    } catch {
+      return res.status(200).json({ ingredients: [], raw: text, parseError: true })
+    }
     if (!Array.isArray(ingredients)) return res.status(200).json({ ingredients: [], raw: text })
     ingredients = ingredients.filter((i: any) => typeof i === 'string')
     res.json({ ingredients })
   } catch (err: any) {
     console.error('Vision error:', err.response?.data || err.message)
-    res.status(500).json({ error: 'Vision analysis failed', detail: err.response?.data?.error?.message || err.message })
+    const detail = err.response?.data?.error?.message || err.message || 'Unknown error'
+    res.status(500).json({ error: 'Vision analysis failed', detail: String(detail).slice(0, 200) })
   }
 }
