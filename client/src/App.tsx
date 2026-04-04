@@ -102,7 +102,9 @@ export default function App() {
   const [manualInput, setManualInput] = useState("")
   const [savedRecipes, setSavedRecipes] = useState<Recipe[]>(() => loadFromStorage(LS_SAVED, [] as Recipe[]))
   const [cookHistory, setCookHistory] = useState<CookHistoryEntry[]>(() => loadFromStorage(LS_HISTORY, [] as CookHistoryEntry[]))
-  const [cookbookTab, setCookbookTab] = useState<"saved" | "history">("saved")
+  const [cookbookTab, setCookbookTab] = useState<"saved" | "history" | "plan">("saved")
+  const [mealPlan, setMealPlan] = useState<Record<string, any>>({})
+  const [planningLoading, setPlanningLoading] = useState(false)
   const [pantryItems, setPantryItems] = useState<PantryItem[]>(() => loadFromStorage(LS_PANTRY, [] as PantryItem[]))
   const [shoppingList, setShoppingList] = useState<ShoppingItem[]>(() => loadFromStorage(LS_SHOPPING, [] as ShoppingItem[]))
   const [selectedForList, setSelectedForList] = useState<Set<number>>(new Set())
@@ -211,7 +213,7 @@ export default function App() {
 
   const openInstacart = (ingredients: string[]) => {
     const query = ingredients.map(i => i.replace(/[^a-zA-Z0-9 ]/g, "").trim()).join(", ")
-    window.open(`https://www.instacart.com/store/search?q=${encodeURIComponent(query)}`, "_blank", "noopener,noreferrer")
+    window.open(`https://www.instacart.com/store/search?q=${encodeURIComponent(query)}&ref=FridgeAI`, "_blank", "noopener,noreferrer")
   }
 
   const reset = () => {
@@ -276,6 +278,21 @@ export default function App() {
   const isInShoppingList = (ing: string) => shoppingList.some(s => s.ingredient.toLowerCase() === ing.toLowerCase())
   const toggleSelectedForList = (id: number) => { setSelectedForList(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s }) }
 
+
+  const generateMealPlan = async () => {
+    setPlanningLoading(true)
+    try {
+      const res = await fetch(`${API}/mealplan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetCalories: 2000 })
+      })
+      const data = await res.json()
+      if (data.week) setMealPlan(data.week)
+    } catch { console.error("Meal plan error") }
+    setPlanningLoading(false)
+  }
+
   return (
     <div className="min-h-screen bg-stone-50">
       {/* Header */}
@@ -311,6 +328,7 @@ export default function App() {
             <div className="flex gap-2 mb-4">
               <button onClick={() => setCookbookTab("saved")} className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${cookbookTab === "saved" ? "bg-stone-800 text-white" : "bg-white text-stone-500 border border-stone-200"}`}>📌 Saved ({savedRecipes.length})</button>
               <button onClick={() => setCookbookTab("history")} className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${cookbookTab === "history" ? "bg-stone-800 text-white" : "bg-white text-stone-500 border border-stone-200"}`}>🍽 Cooked ({cookHistory.length})</button>
+              <button onClick={() => { if (cookbookTab !== "plan") { setCookbookTab("plan"); if (Object.keys(mealPlan).length === 0) generateMealPlan() } }} className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${cookbookTab === "plan" ? "bg-stone-800 text-white" : "bg-white text-stone-500 border border-stone-200"}`}>📅 Plan</button>
             </div>
 
             {cookbookTab === "saved" && (
@@ -353,6 +371,60 @@ export default function App() {
                   </div>
                 ))}</div>
               )}</div>
+            )}
+
+            {cookbookTab === "plan" && (
+              <div>
+                {planningLoading ? (
+                  <div className="card p-8 text-center">
+                    <div className="text-4xl mb-3 animate-bounce">📅</div>
+                    <p className="text-stone-500 text-sm">Planning your week...</p>
+                  </div>
+                ) : Object.keys(mealPlan).length === 0 ? (
+                  <div className="card p-8 text-center">
+                    <div className="text-4xl mb-3">📅</div>
+                    <p className="text-stone-600 font-medium">Weekly meal plan</p>
+                    <p className="text-stone-400 text-xs mt-1">Get AI-powered breakfast, lunch & dinner ideas for the week.</p>
+                    <button onClick={generateMealPlan} className="mt-4 px-5 py-2.5 rounded-xl bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 transition-all">Generate meal plan</button>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="font-bold text-stone-800">This week's meals</h3>
+                      <button onClick={generateMealPlan} className="text-xs text-emerald-600 hover:text-emerald-700 font-medium">🔄 Regenerate</button>
+                    </div>
+                    {["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map(day => {
+                      const dayLower = day.toLowerCase()
+                      const meals = mealPlan[dayLower] || []
+                      return (
+                        <div key={day} className="card p-3">
+                          <p className="text-xs font-bold text-stone-500 uppercase tracking-wide mb-2">{day}</p>
+                          <div className="space-y-2">
+                            {["breakfast","lunch","dinner"].map(mealType => {
+                              const meal = meals.find((m: any) => m.type === mealType)
+                              return (
+                                <div key={mealType} className="flex items-start gap-2">
+                                  <span className="text-xs w-16 flex-shrink-0 text-stone-400 capitalize">{mealType}</span>
+                                  {meal ? (
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-xs font-medium text-stone-700 leading-tight">{meal.title}</p>
+                                      <div className="flex gap-1.5 mt-1">
+                                        {meal.readyInMinutes && <span className="text-xs text-stone-400">⏱ {meal.readyInMinutes}m</span>}
+                                        <button onClick={() => { addRecipeToList(meal); setTab("shopping") }} className="text-xs text-teal-600 hover:text-teal-700">+ Add to cart</button>
+                                      </div>
+                                    </div>
+                                  ) : <span className="text-xs text-stone-300 italic">Not planned</span>}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )
+                    })}
+                    <button onClick={() => { const allMissing = Object.values(mealPlan).flat().filter((m: any) => m.missedIngredients).flatMap((m: any) => m.missedIngredients); openInstacart(allMissing) }} className="w-full py-2.5 rounded-xl bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 transition-all">🛒 Add all ingredients to cart</button>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}
