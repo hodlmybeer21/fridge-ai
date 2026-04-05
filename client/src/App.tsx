@@ -133,13 +133,15 @@ export default function App() {
   }
 
   const analyzePhoto = async (id: string, dataUrl: string) => {
+    const TUNNEL_URL = "https://brakes-favorite-respondent-significantly.trycloudflare.com"
+    const tryFetch = async (url: string) => {
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageUrl: dataUrl }) })
+      if (!res.ok) throw new Error(`${res.status}`)
+      return res.json()
+    }
     try {
-      const res = await fetch(`${API}/analyze`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageUrl: dataUrl }) })
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        throw new Error(data.error || `Server error ${res.status}`)
-      }
-      const data = await res.json()
+      const data = await tryFetch(`${TUNNEL_URL}/analyze`)
+        .catch(() => tryFetch(`${API}/analyze`))
       setPhotos(prev => prev.map(p => p.id === id ? { ...p, ingredients: data.ingredients || [], analyzing: false, error: data.error } : p))
     } catch (err: any) { setPhotos(prev => prev.map(p => p.id === id ? { ...p, analyzing: false, error: err.message } : p)) }
   }
