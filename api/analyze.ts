@@ -50,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           'HTTP-Referer': 'https://fridge.goodbotai.tech',
           'X-Title': 'FridgeAI'
         },
-        timeout: 60000
+        timeout: 0
       }
     )
 

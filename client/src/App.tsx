@@ -61,19 +61,10 @@ const AREAS: { value: Area; label: string; emoji: string }[] = [
 
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => {
-      const MAX_W = 800
-      let w = img.width, h = img.height
-      if (w > MAX_W) { h = Math.round((h * MAX_W) / w); w = MAX_W }
-      const canvas = document.createElement('canvas')
-      canvas.width = w; canvas.height = h
-      const ctx = canvas.getContext('2d')!
-      ctx.drawImage(img, 0, 0, w, h)
-      resolve(canvas.toDataURL('image/jpeg', 0.72))
-    }
-    img.onerror = reject
-    img.src = URL.createObjectURL(file)
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
   })
 }
 
