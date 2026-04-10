@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 
 // API base: relative /api routes work in both dev (Vite proxy) and prod (Vercel serverless functions)
 const API = ''
+const TUNNEL_URL = "https://using-outlined-clients-waiver.trycloudflare.com"
 
 type Recipe = {
   id: number
@@ -15,6 +16,8 @@ type Recipe = {
   readyInMinutes?: number
   servings?: number
   extendedIngredients?: { original: string }[]
+  allIngredients?: string[]
+  instructionPreview?: string[]
 }
 
 type Area = 'fridge' | 'freezer' | 'pantry' | 'grocery'
@@ -133,7 +136,6 @@ export default function App() {
   }
 
   const analyzePhoto = async (id: string, dataUrl: string) => {
-    const TUNNEL_URL = "https://brakes-favorite-respondent-significantly.trycloudflare.com"
     const tryFetch = async (url: string) => {
       const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageUrl: dataUrl }) })
       if (!res.ok) throw new Error(`${res.status}`)
@@ -177,7 +179,7 @@ export default function App() {
     setAllIngredients(unique); setView("analyzing"); setShowFilters(false)
     const activeFilters = { ...filters, ...overrides }
     try {
-      const res = await fetch(`${API}/recipes`, {
+      const res = await fetch(`${TUNNEL_URL}/recipes`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ingredients: unique,
@@ -188,7 +190,7 @@ export default function App() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Recipe search failed")
-      setRecipes(data.recipes || []); setView("recipes")
+      setRecipes(Array.isArray(data) ? data : (data.recipes || [])); setView("recipes")
     } catch (err: any) { setError(err.message || "Something went wrong."); setView("error") }
   }
 
@@ -753,8 +755,14 @@ export default function App() {
             {recipes.length === 0 ? (
               <div className="card p-8 text-center"><div className="text-4xl mb-3">🤷</div><p className="text-stone-600 font-medium">No exact matches found.</p><p className="text-stone-400 text-xs mt-1">Try loosening filters or adding more ingredients.</p></div>
             ) : (
-              <div className="space-y-3">{recipes.map(recipe => (
+              <div className="space-y-3">{recipes.map(recipe => {
+                const allIngs = recipe.allIngredients || [...recipe.usedIngredients, ...recipe.missedIngredients]
+                const titleWords = recipe.title.toLowerCase().split(/\s+/)
+                const titleKeywords = ['chicken', 'beef', 'pork', 'fish', 'salmon', 'shrimp', 'tofu', 'turkey', 'lamb', 'bacon', 'sausage', 'steak', 'egg', 'pasta', 'rice', 'noodle', 'bread']
+                const titleWarning = titleKeywords.find(k => titleWords.some(w => w.includes(k)) && !allIngs.some(i => i.toLowerCase().includes(k)))
+                return (
                 <div key={recipe.id} className="card p-4">
+                  {titleWarning && <div className="mb-2 text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">⚠️ Recipe name mentions "{titleWarning}" — not in your photo</div>}
                   <div className="flex gap-3">
                     {recipe.image && <img src={recipe.image} alt={recipe.title} className="w-20 h-20 rounded-xl object-cover flex-shrink-0" />}
                     <div className="flex-1 min-w-0">
@@ -773,8 +781,32 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+                  {allIngs.length > 0 && (
+                    <div className="mt-2">
+                      <p className="text-xs text-stone-500 mb-1">Full recipe ingredients:</p>
+                      <div className="flex flex-wrap gap-1">
+                        {allIngs.map((ing, i) => {
+                          const isUsed = recipe.usedIngredients.some(u => u.toLowerCase().includes(ing.toLowerCase()) || ing.toLowerCase().includes(u.toLowerCase()))
+                          return <span key={i} className={`text-xs px-1.5 py-0.5 rounded ${isUsed ? 'bg-emerald-100 text-emerald-700' : 'bg-stone-100 text-stone-400 line-through'}`}>{ing}</span>
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {recipe.instructionPreview && recipe.instructionPreview.length > 0 && (
+                    <div className="mt-2 border-t border-stone-100 pt-2">
+                      <p className="text-xs text-stone-500 mb-1">👨‍🍳 How to make it:</p>
+                      <ol className="space-y-1">
+                        {recipe.instructionPreview.slice(0, 3).map((step, i) => (
+                          <li key={i} className="text-xs text-stone-600 flex gap-1.5">
+                            <span className="text-emerald-500 font-bold flex-shrink-0">{i+1}.</span>
+                            <span className="line-clamp-2">{step.replace(/<[^>]+>/g, '')}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
                 </div>
-              ))}</div>
+              )})}</div>
             )}
           </div>
         )}
